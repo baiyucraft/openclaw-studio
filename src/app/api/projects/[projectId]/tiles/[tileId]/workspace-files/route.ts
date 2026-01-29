@@ -1,16 +1,14 @@
 import { NextResponse } from "next/server";
 
 import fs from "node:fs";
-import path from "node:path";
 
 import { logger } from "@/lib/logger";
 import { resolveAgentWorkspaceDir } from "@/lib/projects/agentWorkspace";
+import { WORKSPACE_FILE_NAMES } from "@/lib/projects/workspaceFiles";
 import {
-  WORKSPACE_FILE_NAMES,
-  isWorkspaceFileName,
-  type WorkspaceFileName,
-} from "@/lib/projects/workspaceFiles";
-import { readWorkspaceFile } from "@/lib/projects/workspaceFiles.server";
+  readWorkspaceFiles,
+  writeWorkspaceFiles,
+} from "@/lib/projects/workspaceFiles.server";
 import { resolveProjectTile } from "@/lib/projects/resolve";
 import type { ProjectTileWorkspaceFilesUpdatePayload } from "@/lib/projects/types";
 import { loadStore } from "../../../../store";
@@ -36,9 +34,7 @@ export async function GET(
     if (!fs.existsSync(workspaceDir)) {
       return NextResponse.json({ error: "Agent workspace not found." }, { status: 404 });
     }
-    const files = WORKSPACE_FILE_NAMES.map((name) =>
-      readWorkspaceFile(workspaceDir, name)
-    );
+    const files = readWorkspaceFiles(workspaceDir);
     return NextResponse.json({ files });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load workspace files.";
@@ -72,29 +68,11 @@ export async function PUT(
       return NextResponse.json({ error: "Files payload is invalid." }, { status: 400 });
     }
 
-    for (const entry of body.files) {
-      const name = typeof entry?.name === "string" ? entry.name.trim() : "";
-      if (!name || !isWorkspaceFileName(name)) {
-        return NextResponse.json(
-          { error: `Invalid file name: ${entry?.name ?? ""}` },
-          { status: 400 }
-        );
-      }
-      if (typeof entry.content !== "string") {
-        return NextResponse.json({ error: `Invalid content for ${name}.` }, { status: 400 });
-      }
+    const result = writeWorkspaceFiles(workspaceDir, body.files);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
     }
-
-    for (const entry of body.files) {
-      const name = entry.name as WorkspaceFileName;
-      const filePath = path.join(workspaceDir, name);
-      fs.writeFileSync(filePath, entry.content, "utf8");
-    }
-
-    const files = WORKSPACE_FILE_NAMES.map((name) =>
-      readWorkspaceFile(workspaceDir, name)
-    );
-    return NextResponse.json({ files });
+    return NextResponse.json({ files: result.files });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to save workspace files.";
     logger.error(message);
