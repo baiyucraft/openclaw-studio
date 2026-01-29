@@ -1,8 +1,17 @@
-import os from "node:os";
 import path from "node:path";
 
+import { resolveStateDir } from "@/lib/clawdbot/paths";
+
+export const resolveAgentCanvasDir = (
+  env: NodeJS.ProcessEnv = process.env,
+  homedir?: () => string
+) => {
+  const stateDir = resolveStateDir(env, homedir);
+  return path.join(stateDir, "agent-canvas");
+};
+
 export const resolveProjectAgentsRoot = (projectId: string) => {
-  return path.join(os.homedir(), ".clawdbot", "agent-canvas", "workspaces", projectId, "agents");
+  return path.join(resolveAgentCanvasDir(), "workspaces", projectId, "agents");
 };
 
 export const resolveAgentWorkspaceDir = (projectId: string, agentId: string) => {

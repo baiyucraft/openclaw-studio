@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { deleteDirIfExists } from "@/lib/projects/fs.server";
 import { resolveStateDir, resolveUserPath } from "@/lib/clawdbot/paths";
+import { resolveAgentCanvasDir } from "@/lib/projects/agentWorkspace";
 
 let tempDir: string | null = null;
 
@@ -38,6 +39,25 @@ describe("projectFs", () => {
     fs.mkdirSync(moltbotDir, { recursive: true });
     const env = {} as unknown as NodeJS.ProcessEnv;
     expect(resolveStateDir(env, () => home)).toBe(moltbotDir);
+  });
+
+  it("resolvesAgentCanvasDirFromEnv", () => {
+    const home = path.join(os.tmpdir(), "clawdbot-test-home");
+    const env = { MOLTBOT_STATE_DIR: "~/state-test" } as unknown as NodeJS.ProcessEnv;
+    expect(resolveAgentCanvasDir(env, () => home)).toBe(
+      path.join(home, "state-test", "agent-canvas")
+    );
+  });
+
+  it("resolvesAgentCanvasDirPrefersMoltbot", () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-projectfs-"));
+    const home = tempDir;
+    const moltbotDir = path.join(home, ".moltbot");
+    fs.mkdirSync(moltbotDir, { recursive: true });
+    const env = {} as unknown as NodeJS.ProcessEnv;
+    expect(resolveAgentCanvasDir(env, () => home)).toBe(
+      path.join(moltbotDir, "agent-canvas")
+    );
   });
 
   it("deleteDirIfExistsRemovesDirectory", () => {
