@@ -62,8 +62,9 @@ Flow:
 Flow:
 1. UI loads gateway URL/token from `/api/gateway`.
 2. `GatewayClient` connects + sends `connect` request.
-3. UI sends requests (frames) and receives event streams.
-4. Canvas store updates tile output/state.
+3. UI requests `models.list` to populate the model selector (backed by `~/.moltbot/moltbot.json` via the gateway).
+4. UI sends requests (frames) and receives event streams.
+5. Canvas store updates tile output/state.
 
 ### 3) Workspace files + heartbeat
 - **Workspace files**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, `MEMORY.md`.

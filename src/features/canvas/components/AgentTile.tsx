@@ -13,6 +13,7 @@ import {
   updateProjectTileHeartbeat,
   updateProjectTileWorkspaceFiles,
 } from "@/lib/projects/client";
+import type { GatewayModelChoice } from "@/lib/gateway/models";
 import {
   createWorkspaceFilesState,
   isWorkspaceFileName,
@@ -31,6 +32,7 @@ type AgentTileProps = {
   projectId: string | null;
   isSelected: boolean;
   canSend: boolean;
+  models: GatewayModelChoice[];
   onDelete: () => void;
   onNameChange: (name: string) => Promise<boolean>;
   onDraftChange: (value: string) => void;
@@ -48,6 +50,7 @@ export const AgentTile = ({
   projectId,
   isSelected,
   canSend,
+  models,
   onDelete,
   onNameChange,
   onDraftChange,
@@ -318,6 +321,23 @@ export const AgentTile = ({
       : tile.status === "error"
         ? "bg-rose-200 text-rose-900"
         : "bg-amber-200 text-amber-900";
+  const modelOptions = models.map((entry) => ({
+    value: `${entry.provider}/${entry.id}`,
+    label:
+      entry.name === `${entry.provider}/${entry.id}`
+        ? entry.name
+        : `${entry.name} (${entry.provider}/${entry.id})`,
+    reasoning: entry.reasoning,
+  }));
+  const modelValue = tile.model ?? "";
+  const modelOptionsWithFallback =
+    modelValue && !modelOptions.some((option) => option.value === modelValue)
+      ? [{ value: modelValue, label: modelValue, reasoning: undefined }, ...modelOptions]
+      : modelOptions;
+  const selectedModel = modelOptionsWithFallback.find(
+    (option) => option.value === modelValue
+  );
+  const allowThinking = selectedModel?.reasoning !== false;
   const showThinking = tile.status === "running" && Boolean(tile.thinkingTrace);
   const showTranscript =
     tile.outputLines.length > 0 || Boolean(tile.streamText) || showThinking;
@@ -592,19 +612,17 @@ export const AgentTile = ({
                             onModelChange(value ? value : null);
                           }}
                         >
-                          <option value="openai-codex/gpt-5.2-codex">GPT-5.2 Codex</option>
-                          <option value="xai/grok-4-1-fast-reasoning">
-                            grok-4-1-fast-reasoning
-                          </option>
-                          <option value="xai/grok-4-1-fast-non-reasoning">
-                            grok-4-1-fast-non-reasoning
-                          </option>
-                          <option value="zai/glm-4.7">glm-4.7</option>
+                          {modelOptionsWithFallback.length === 0 ? (
+                            <option value="">No models found</option>
+                          ) : null}
+                          {modelOptionsWithFallback.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
                         </select>
                       </label>
-                      {tile.model === "xai/grok-4-1-fast-non-reasoning" ? (
-                        <div />
-                      ) : (
+                      {allowThinking ? (
                         <label className="flex flex-col gap-2 text-xs font-semibold uppercase text-slate-500">
                           <span>Thinking</span>
                           <select
@@ -622,8 +640,10 @@ export const AgentTile = ({
                             <option value="medium">Medium</option>
                             <option value="high">High</option>
                             <option value="xhigh">XHigh</option>
-                          </select>
-                        </label>
+                            </select>
+                          </label>
+                      ) : (
+                        <div />
                       )}
                     </div>
                     <button
@@ -939,9 +959,11 @@ export const AgentTile = ({
         )
       : null;
 
-  const resizeHandleClass = isSelected
-    ? "pointer-events-auto opacity-100"
-    : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100";
+  const resizeHandleClass = showTranscript
+    ? isSelected
+      ? "pointer-events-auto opacity-100"
+      : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
+    : "pointer-events-none opacity-0";
 
   return (
     <div data-tile className="group relative flex h-full w-full flex-col gap-3">
@@ -949,7 +971,11 @@ export const AgentTile = ({
       <div className="flex flex-col gap-3 px-4 pt-4 pb-4">
         <div className="flex items-start justify-between gap-2">
           <div className="flex flex-1 flex-col items-center gap-2">
-            <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-3 py-1 shadow-sm">
+            <div
+              className={`flex items-center gap-2 rounded-full border bg-white/90 px-3 py-1 shadow-sm ${
+                isSelected ? "agent-name-selected" : "border-slate-200"
+              }`}
+            >
               <input
                 className="w-full bg-transparent text-center text-xs font-semibold uppercase tracking-wide text-slate-700 outline-none"
                 value={nameDraft}
@@ -1069,7 +1095,7 @@ export const AgentTile = ({
         >
           <div
             ref={outputRef}
-            className="flex-1 overflow-auto rounded-2xl border border-slate-200 bg-white/60 p-3 text-xs text-slate-700"
+            className="nowheel flex-1 overflow-auto rounded-2xl border border-slate-200 bg-white/60 p-3 text-xs text-slate-700"
             onWheel={handleOutputWheel}
             data-testid="agent-transcript"
           >

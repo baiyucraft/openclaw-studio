@@ -2,12 +2,14 @@
 
 import { type Node, type NodeProps } from "@xyflow/react";
 import type { AgentTile as AgentTileType, TileSize } from "@/features/canvas/state/store";
+import type { GatewayModelChoice } from "@/lib/gateway/models";
 import { AgentTile } from "./AgentTile";
 
 export type AgentTileNodeData = {
   tile: AgentTileType;
   projectId: string | null;
   canSend: boolean;
+  models: GatewayModelChoice[];
   onResize: (size: TileSize) => void;
   onDelete: () => void;
   onNameChange: (name: string) => Promise<boolean>;
@@ -27,6 +29,7 @@ export const AgentTileNode = ({ data, selected }: NodeProps<AgentTileNodeType>) 
     tile,
     projectId,
     canSend,
+    models,
     onResize,
     onDelete,
     onNameChange,
@@ -46,6 +49,7 @@ export const AgentTileNode = ({ data, selected }: NodeProps<AgentTileNodeType>) 
         projectId={projectId}
         isSelected={selected}
         canSend={canSend}
+        models={models}
         onDelete={onDelete}
         onNameChange={onNameChange}
         onDraftChange={onDraftChange}

@@ -10,6 +10,7 @@ import { extractText } from "@/lib/text/extractText";
 import { extractThinking, formatThinkingMarkdown } from "@/lib/text/extractThinking";
 import { useGatewayConnection } from "@/lib/gateway/useGatewayConnection";
 import type { EventFrame } from "@/lib/gateway/frames";
+import type { GatewayModelChoice } from "@/lib/gateway/models";
 import {
   AgentCanvasProvider,
   getActiveProject,
@@ -18,6 +19,7 @@ import {
 import { createProjectDiscordChannel } from "@/lib/projects/client";
 import { createRandomAgentName, normalizeAgentName } from "@/lib/names/agentNames";
 import type { AgentTile, ProjectRuntime } from "@/features/canvas/state/store";
+import { logger } from "@/lib/logger";
 // (CANVAS_BASE_ZOOM import removed)
 
 type ChatEventPayload = {
@@ -72,6 +74,17 @@ type ChatHistoryResult = {
   sessionId?: string;
   messages: ChatHistoryMessage[];
   thinkingLevel?: string;
+};
+
+type GatewayConfigSnapshot = {
+  config?: {
+    agents?: {
+      defaults?: {
+        model?: string | { primary?: string; fallbacks?: string[] };
+        models?: Record<string, { alias?: string }>;
+      };
+    };
+  };
 };
 
 const buildHistoryLines = (messages: ChatHistoryMessage[]) => {
@@ -200,9 +213,61 @@ const AgentCanvasPage = () => {
   const stateRef = useRef(state);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [gatewayModels, setGatewayModels] = useState<GatewayModelChoice[]>([]);
+  const [gatewayModelsError, setGatewayModelsError] = useState<string | null>(null);
   // flowInstance removed (zoom controls live in the bottom-right ReactFlow Controls).
 
   const tiles = useMemo(() => project?.tiles ?? [], [project?.tiles]);
+  const errorMessage = state.error ?? gatewayModelsError;
+
+  const resolveConfiguredModelKey = useCallback(
+    (raw: string, models?: Record<string, { alias?: string }>) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      if (trimmed.includes("/")) return trimmed;
+      if (models) {
+        const target = Object.entries(models).find(
+          ([, entry]) => entry?.alias?.trim().toLowerCase() === trimmed.toLowerCase()
+        );
+        if (target?.[0]) return target[0];
+      }
+      return `anthropic/${trimmed}`;
+    },
+    []
+  );
+
+  const buildAllowedModelKeys = useCallback(
+    (snapshot: GatewayConfigSnapshot | null) => {
+      const allowedList: string[] = [];
+      const allowedSet = new Set<string>();
+      const defaults = snapshot?.config?.agents?.defaults;
+      const modelDefaults = defaults?.model;
+      const modelAliases = defaults?.models;
+      const pushKey = (raw?: string | null) => {
+        if (!raw) return;
+        const resolved = resolveConfiguredModelKey(raw, modelAliases);
+        if (!resolved) return;
+        if (allowedSet.has(resolved)) return;
+        allowedSet.add(resolved);
+        allowedList.push(resolved);
+      };
+      if (typeof modelDefaults === "string") {
+        pushKey(modelDefaults);
+      } else if (modelDefaults && typeof modelDefaults === "object") {
+        pushKey(modelDefaults.primary ?? null);
+        for (const fallback of modelDefaults.fallbacks ?? []) {
+          pushKey(fallback);
+        }
+      }
+      if (modelAliases) {
+        for (const key of Object.keys(modelAliases)) {
+          pushKey(key);
+        }
+      }
+      return allowedList;
+    },
+    [resolveConfiguredModelKey]
+  );
 
   const computeNewTilePosition = useCallback(
     (tileSize: { width: number; height: number }) => {
@@ -310,6 +375,63 @@ const AgentCanvasPage = () => {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    if (status !== "connected") {
+      setGatewayModels([]);
+      setGatewayModelsError(null);
+      return;
+    }
+    let cancelled = false;
+    const loadModels = async () => {
+      let configSnapshot: GatewayConfigSnapshot | null = null;
+      try {
+        configSnapshot = await client.call<GatewayConfigSnapshot>("config.get", {});
+      } catch (err) {
+        logger.error("Failed to load gateway config.", err);
+      }
+      try {
+        const result = await client.call<{ models: GatewayModelChoice[] }>(
+          "models.list",
+          {}
+        );
+        if (cancelled) return;
+        const catalog = Array.isArray(result.models) ? result.models : [];
+        const allowedKeys = buildAllowedModelKeys(configSnapshot);
+        if (allowedKeys.length === 0) {
+          setGatewayModels(catalog);
+          setGatewayModelsError(null);
+          return;
+        }
+        const filtered = catalog.filter((entry) =>
+          allowedKeys.includes(`${entry.provider}/${entry.id}`)
+        );
+        const filteredKeys = new Set(
+          filtered.map((entry) => `${entry.provider}/${entry.id}`)
+        );
+        const extras: GatewayModelChoice[] = [];
+        for (const key of allowedKeys) {
+          if (filteredKeys.has(key)) continue;
+          const [provider, id] = key.split("/");
+          if (!provider || !id) continue;
+          extras.push({ provider, id, name: key });
+        }
+        setGatewayModels([...filtered, ...extras]);
+        setGatewayModelsError(null);
+      } catch (err) {
+        if (cancelled) return;
+        const message =
+          err instanceof Error ? err.message : "Failed to load models.";
+        setGatewayModelsError(message);
+        setGatewayModels([]);
+        logger.error("Failed to load gateway models.", err);
+      }
+    };
+    void loadModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, status]);
 
   useEffect(() => {
     const node = viewportRef.current;
@@ -898,6 +1020,7 @@ const AgentCanvasPage = () => {
         viewportRef={viewportRef}
         selectedTileId={state.selectedTileId}
         canSend={status === "connected"}
+        models={gatewayModels}
         onSelectTile={(id) => dispatch({ type: "selectTile", tileId: id })}
         onMoveTile={(id, position) =>
           project
@@ -1078,10 +1201,10 @@ const AgentCanvasPage = () => {
           </div>
         ) : null}
 
-        {state.error ? (
+        {errorMessage ? (
           <div className="pointer-events-auto mx-auto w-full max-w-4xl">
             <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
-              {state.error}
+              {errorMessage}
             </div>
           </div>
         ) : null}

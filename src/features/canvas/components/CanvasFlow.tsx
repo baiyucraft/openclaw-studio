@@ -18,6 +18,7 @@ import type {
   TilePosition,
   TileSize,
 } from "@/features/canvas/state/store";
+import type { GatewayModelChoice } from "@/lib/gateway/models";
 import { AgentTileNode, type AgentTileNodeData } from "./AgentTileNode";
 
 type CanvasFlowProps = {
@@ -27,6 +28,7 @@ type CanvasFlowProps = {
   viewportRef?: React.MutableRefObject<HTMLDivElement | null>;
   selectedTileId: string | null;
   canSend: boolean;
+  models: GatewayModelChoice[];
   onSelectTile: (id: string | null) => void;
   onMoveTile: (id: string, position: TilePosition) => void;
   onResizeTile: (id: string, size: TileSize) => void;
@@ -50,6 +52,7 @@ const CanvasFlowInner = ({
   viewportRef,
   selectedTileId,
   canSend,
+  models,
   onSelectTile,
   onMoveTile,
   onResizeTile,
@@ -139,6 +142,7 @@ const CanvasFlowInner = ({
           tile,
           projectId,
           canSend,
+          models,
           onResize: (size) => updateNodeSize(tile.id, size),
           onResizeEnd: (size) => commitNodeSize(tile.id, size),
           onDelete: () => handlersRef.current.onDeleteTile(tile.id),
@@ -154,7 +158,7 @@ const CanvasFlowInner = ({
           onNameShuffle: () => handlersRef.current.onNameShuffle(tile.id),
         },
       })),
-    [canSend, commitNodeSize, projectId, tiles, updateNodeSize]
+    [canSend, commitNodeSize, models, projectId, tiles, updateNodeSize]
   );
 
   useEffect(() => {
