@@ -37,12 +37,6 @@ export type ProjectCreateOrOpenResult = {
   warnings: string[];
 };
 
-export type ProjectCreatePayload = {
-  name: string;
-};
-
-export type ProjectCreateResult = ProjectCreateOrOpenResult;
-
 export type ProjectDeleteResult = {
   store: ProjectsStore;
   warnings: string[];

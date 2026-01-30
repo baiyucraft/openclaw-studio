@@ -1,6 +1,4 @@
 import type {
-  ProjectCreatePayload,
-  ProjectCreateResult,
   ProjectDeleteResult,
   ProjectDiscordChannelCreatePayload,
   ProjectDiscordChannelCreateResult,
@@ -23,17 +21,7 @@ export const fetchProjectsStore = async (): Promise<ProjectsStore> => {
   return fetchJson<ProjectsStore>("/api/projects", { cache: "no-store" });
 };
 
-export const createProject = async (
-  payload: ProjectCreatePayload
-): Promise<ProjectCreateResult> => {
-  return fetchJson<ProjectCreateResult>("/api/projects", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-};
-
-export const openProject = async (
+export const createOrOpenProject = async (
   payload: ProjectCreateOrOpenPayload
 ): Promise<ProjectCreateOrOpenResult> => {
   return fetchJson<ProjectCreateOrOpenResult>("/api/projects", {

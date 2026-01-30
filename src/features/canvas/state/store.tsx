@@ -16,11 +16,10 @@ import { CANVAS_BASE_ZOOM } from "@/lib/canvasDefaults";
 import { MAX_TILE_HEIGHT, MIN_TILE_SIZE } from "@/lib/canvasTileDefaults";
 import {
   createProjectTile as apiCreateProjectTile,
-  createProject as apiCreateProject,
   deleteProjectTile as apiDeleteProjectTile,
   deleteProject as apiDeleteProject,
   fetchProjectsStore,
-  openProject as apiOpenProject,
+  createOrOpenProject as apiCreateOrOpenProject,
   updateProjectTile as apiUpdateProjectTile,
   saveProjectsStore,
 } from "@/lib/projects/client";
@@ -278,8 +277,9 @@ type StoreContextValue = {
     role: ProjectTile["role"]
   ) => Promise<{ tile: ProjectTile; warnings: string[] } | null>;
   refreshStore: () => Promise<void>;
-  createProject: (name: string) => Promise<{ warnings: string[] } | null>;
-  openProject: (path: string) => Promise<{ warnings: string[] } | null>;
+  createOrOpenProject: (
+    payload: { name: string } | { path: string }
+  ) => Promise<{ warnings: string[] } | null>;
   deleteProject: (projectId: string) => Promise<{ warnings: string[] } | null>;
   deleteTile: (
     projectId: string,
@@ -349,25 +349,15 @@ export const AgentCanvasProvider = ({ children }: { children: ReactNode }) => {
     [dispatch]
   );
 
-  const createProject = useCallback(async (name: string) => {
+  const createOrOpenProject = useCallback(
+    async (payload: { name: string } | { path: string }) => {
     try {
-      const result = await apiCreateProject({ name });
+      const result = await apiCreateOrOpenProject(payload);
       dispatch({ type: "loadStore", store: result.store });
       return { warnings: result.warnings };
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to create workspace.";
-      dispatch({ type: "setError", error: message });
-      return null;
-    }
-  }, []);
-
-  const openProject = useCallback(async (path: string) => {
-    try {
-      const result = await apiOpenProject({ path });
-      dispatch({ type: "loadStore", store: result.store });
-      return { warnings: result.warnings };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to open workspace.";
+      const message =
+        err instanceof Error ? err.message : "Failed to create or open workspace.";
       dispatch({ type: "setError", error: message });
       return null;
     }
@@ -461,8 +451,7 @@ export const AgentCanvasProvider = ({ children }: { children: ReactNode }) => {
       dispatch,
       createTile,
       refreshStore,
-      createProject,
-      openProject,
+      createOrOpenProject,
       deleteProject,
       deleteTile,
       renameTile,
@@ -472,8 +461,7 @@ export const AgentCanvasProvider = ({ children }: { children: ReactNode }) => {
     state,
     createTile,
     refreshStore,
-    createProject,
-    openProject,
+    createOrOpenProject,
     deleteProject,
     deleteTile,
     renameTile,

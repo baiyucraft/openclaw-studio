@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { updateProjectTile } from "@/lib/projects/client";
+import { createOrOpenProject, updateProjectTile } from "@/lib/projects/client";
 import { fetchJson } from "@/lib/http";
 
 vi.mock("@/lib/http", () => ({
@@ -8,6 +8,36 @@ vi.mock("@/lib/http", () => ({
 }));
 
 describe("projects client", () => {
+  it("createOrOpenProject posts name payload", async () => {
+    vi.mocked(fetchJson).mockResolvedValue({
+      store: { version: 2, activeProjectId: null, projects: [] },
+      warnings: [],
+    });
+
+    await createOrOpenProject({ name: "Demo" });
+
+    expect(fetchJson).toHaveBeenCalledWith("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Demo" }),
+    });
+  });
+
+  it("createOrOpenProject posts path payload", async () => {
+    vi.mocked(fetchJson).mockResolvedValue({
+      store: { version: 2, activeProjectId: null, projects: [] },
+      warnings: [],
+    });
+
+    await createOrOpenProject({ path: "/tmp/demo" });
+
+    expect(fetchJson).toHaveBeenCalledWith("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/tmp/demo" }),
+    });
+  });
+
   it("updateProjectTile sends PATCH with name payload", async () => {
     vi.mocked(fetchJson).mockResolvedValue({ store: { version: 2, activeProjectId: null, projects: [] }, warnings: [] });
 

@@ -194,8 +194,7 @@ const AgentCanvasPage = () => {
     state,
     dispatch,
     createTile,
-    createProject,
-    openProject,
+    createOrOpenProject,
     deleteProject,
     deleteTile,
     renameTile,
@@ -904,24 +903,24 @@ const AgentCanvasPage = () => {
       setProjectWarnings(["Workspace name is required."]);
       return;
     }
-    const result = await createProject(projectName.trim());
+    const result = await createOrOpenProject({ name: projectName.trim() });
     if (!result) return;
     setProjectWarnings(result.warnings);
     setProjectName("");
     setShowProjectForm(false);
-  }, [createProject, projectName]);
+  }, [createOrOpenProject, projectName]);
 
   const handleProjectOpen = useCallback(async () => {
     if (!projectPath.trim()) {
       setOpenProjectWarnings(["Workspace path is required."]);
       return;
     }
-    const result = await openProject(projectPath.trim());
+    const result = await createOrOpenProject({ path: projectPath.trim() });
     if (!result) return;
     setOpenProjectWarnings(result.warnings);
     setProjectPath("");
     setShowOpenProjectForm(false);
-  }, [openProject, projectPath]);
+  }, [createOrOpenProject, projectPath]);
 
   const handleProjectDelete = useCallback(async () => {
     if (!project) return;
