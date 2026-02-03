@@ -100,7 +100,18 @@ Run both OpenClaw Studio and OpenClaw inside the same WSL2 distro. Use the WSL s
 - **Missing config**: Run `openclaw onboard` or set `OPENCLAW_CONFIG_PATH`
 - **Gateway unreachable**: Confirm the gateway is running and `NEXT_PUBLIC_GATEWAY_URL` matches
 - **Auth errors**: Check `gateway.auth.token` in `openclaw.json`
-- **Inspect returns 404**: The gateway tool policy is blocking `read`/`write`. Allow them per agent (see above).
+- **Inspect returns 404**: The gateway tool policy is blocking `read`/`write`. Allow them per agent (see above), then restart the gateway.
+
+Example patch (per-agent allowlist):
+```bash
+openclaw gateway call config.get --params '{}' # capture payload.hash
+openclaw gateway call config.patch --params '{
+  "raw": "{\\n  agents: { list: [\\n    { id: \\"openclaw-studio\\", tools: { allow: [\\"read\\", \\"write\\"] } }\\n  ] }\\n}\\n",
+  "baseHash": "<hash-from-config.get>",
+  "note": "Allow read/write tools for studio",
+  "restartDelayMs": 1000
+}'
+```
 
 ## Architecture
 
