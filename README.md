@@ -16,6 +16,8 @@ OpenClaw Studio solves this. It's a Next.js app that connects to your OpenClaw g
 ## What it does
 
 - Shows you every agent at a glance
+- Runs a focused workspace as the active UX (fleet list + primary agent + inspect sidebar)
+- Keeps canvas mode code parked in-repo for a future return
 - Reads and edits workspace files (AGENTS.md, MEMORY.md, etc.) via the gateway
 - Streams tool output in real time
 - Provisions Discord channels when you need them

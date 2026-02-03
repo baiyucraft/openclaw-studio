@@ -305,11 +305,9 @@ textarea:focus::-webkit-scrollbar {
 }
 
 .agent-inspect-panel {
-  position: absolute;
-  left: 0;
-  top: var(--header-offset, 0px);
-  height: calc(100% - var(--header-offset, 0px));
-  width: min(92vw, 420px);
+  position: relative;
+  height: 100%;
+  width: 100%;
   background: linear-gradient(
       180deg,
       color-mix(in oklch, var(--sidebar) 92%, transparent) 0%,
@@ -321,8 +319,6 @@ textarea:focus::-webkit-scrollbar {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   overflow-y: auto;
-  pointer-events: auto;
-  z-index: 5;
 }
 
 @keyframes fadeUp {

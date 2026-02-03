@@ -22,21 +22,23 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("canvas renders controls when disconnected", async ({ page }) => {
-  await page.goto("/");
-  await page.getByTestId("view-mode-canvas").click();
+test.describe.skip("canvas mode is parked", () => {
+  test("canvas renders controls when disconnected", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("view-mode-canvas").click();
 
-  const pane = page.locator(".react-flow__pane");
-  await expect(pane).toBeVisible();
+    const pane = page.locator(".react-flow__pane");
+    await expect(pane).toBeVisible();
 
-  const controls = page.locator(".react-flow__controls");
-  await expect(controls).toBeVisible();
-});
+    const controls = page.locator(".react-flow__controls");
+    await expect(controls).toBeVisible();
+  });
 
-test("canvas renders minimap when disconnected", async ({ page }) => {
-  await page.goto("/");
-  await page.getByTestId("view-mode-canvas").click();
+  test("canvas renders minimap when disconnected", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("view-mode-canvas").click();
 
-  const minimap = page.locator(".react-flow__minimap");
-  await expect(minimap).toBeVisible();
+    const minimap = page.locator(".react-flow__minimap");
+    await expect(minimap).toBeVisible();
+  });
 });

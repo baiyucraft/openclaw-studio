@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // (ReactFlowInstance import removed)
 import { CanvasFlow } from "@/features/canvas/components/CanvasFlow";
 import { AgentTile as AgentTileCard } from "@/features/canvas/components/AgentTile";
@@ -59,7 +59,6 @@ import {
   resolveGatewayLayout,
   type StudioAgentLayout,
 } from "@/lib/studio/settings";
-import { BrushCleaning } from "lucide-react";
 import { generateUUID } from "@/lib/gateway/openclaw/uuid";
 // (CANVAS_BASE_ZOOM import removed)
 
@@ -142,6 +141,7 @@ type StatusSummary = {
 const SPECIAL_UPDATE_HEARTBEAT_RE = /\bheartbeat\b/i;
 const SPECIAL_UPDATE_CRON_RE = /\bcron\b/i;
 const DEFAULT_TILE_GAP = { x: 48, y: 56 };
+const CANVAS_MODE_ENABLED = false;
 
 const rectsOverlap = (
   a: { x: number; y: number; width: number; height: number },
@@ -407,12 +407,10 @@ const AgentCanvasPage = () => {
     disconnect,
     setGatewayUrl,
     setToken,
-    clearError,
   } = useGatewayConnection();
 
   const { state, dispatch, hydrateAgents, setError, setLoading } = useAgentCanvasStore();
   const [showConnectionPanel, setShowConnectionPanel] = useState(false);
-  const [viewMode, setViewMode] = useState<"focused" | "canvas">("focused");
   const [focusFilter, setFocusFilter] = useState<FocusFilter>("all");
   const [focusedPreferencesLoaded, setFocusedPreferencesLoaded] = useState(false);
   const [heartbeatTick, setHeartbeatTick] = useState(0);
@@ -903,7 +901,6 @@ const AgentCanvasPage = () => {
         }
         const preference = resolveFocusedPreference(settingsResult.settings, key);
         if (preference) {
-          setViewMode(preference.mode);
           setFocusFilter(preference.filter);
           dispatch({
             type: "selectAgent",
@@ -911,7 +908,6 @@ const AgentCanvasPage = () => {
           });
           return;
         }
-        setViewMode("focused");
         setFocusFilter("all");
       } catch (err) {
         logger.error("Failed to load focused preference.", err);
@@ -947,7 +943,7 @@ const AgentCanvasPage = () => {
       void updateStudioSettings({
         focused: {
           [key]: {
-            mode: viewMode,
+            mode: "focused",
             filter: focusFilter,
             selectedAgentId: stateRef.current.selectedAgentId,
           },
@@ -962,7 +958,7 @@ const AgentCanvasPage = () => {
         focusedSaveTimerRef.current = null;
       }
     };
-  }, [focusFilter, focusedPreferencesLoaded, gatewayUrl, viewMode, state.selectedAgentId]);
+  }, [focusFilter, focusedPreferencesLoaded, gatewayUrl, state.selectedAgentId]);
 
   useEffect(() => {
     if (status !== "connected") return;
@@ -1186,7 +1182,7 @@ const AgentCanvasPage = () => {
       observer?.disconnect();
       window.removeEventListener("resize", update);
     };
-  }, [viewMode]);
+  }, []);
 
   useEffect(() => {
     if (!state.selectedAgentId) return;
@@ -1195,11 +1191,10 @@ const AgentCanvasPage = () => {
   }, [agents, dispatch, state.selectedAgentId]);
 
   useEffect(() => {
-    if (viewMode !== "focused") return;
     const nextId = focusedAgent?.agentId ?? null;
     if (state.selectedAgentId === nextId) return;
     dispatch({ type: "selectAgent", agentId: nextId });
-  }, [dispatch, focusedAgent, state.selectedAgentId, viewMode]);
+  }, [dispatch, focusedAgent, state.selectedAgentId]);
 
   useEffect(() => {
     for (const tile of agents) {
@@ -2061,8 +2056,8 @@ const AgentCanvasPage = () => {
   const connectionPanelVisible = showConnectionPanel || status !== "connected";
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden">
-      {viewMode === "canvas" ? (
+    <div className="relative h-screen w-screen overflow-hidden bg-background">
+      {CANVAS_MODE_ENABLED ? (
         <CanvasFlow
           tiles={agents}
           transform={state.canvas}
@@ -2080,55 +2075,20 @@ const AgentCanvasPage = () => {
           onInspectTile={handleInspectTile}
           onUpdateTransform={(patch) => dispatch({ type: "setCanvas", patch })}
         />
-      ) : (
-        <div className="absolute inset-0 bg-background/40" />
-      )}
-
-      {inspectTile ? (
-        <div
-          style={
-            {
-              "--header-offset": `${headerOffset}px`,
-            } as CSSProperties
-          }
-        >
-          <AgentInspectPanel
-            key={inspectTile.agentId}
-            tile={inspectTile}
-            client={client}
-            models={gatewayModels}
-            onClose={() => setInspectAgentId(null)}
-            onDelete={() => handleDeleteAgent(inspectTile.agentId)}
-            onModelChange={(value) =>
-              handleModelChange(inspectTile.agentId, inspectTile.sessionKey, value)
-            }
-            onThinkingChange={(value) =>
-              handleThinkingChange(inspectTile.agentId, inspectTile.sessionKey, value)
-            }
-            onToolCallingToggle={(enabled) =>
-              handleToolCallingToggle(inspectTile.agentId, enabled)
-            }
-            onThinkingTracesToggle={(enabled) =>
-              handleThinkingTracesToggle(inspectTile.agentId, enabled)
-            }
-          />
-        </div>
       ) : null}
 
-      <div className="pointer-events-none absolute inset-0 z-10 flex flex-col gap-4 p-6">
-        <div ref={headerRef} className="pointer-events-auto mx-auto w-full max-w-4xl">
+      <div className="relative z-10 flex h-full flex-col gap-4 p-4 md:p-6">
+        <div ref={headerRef} className="w-full">
           <HeaderBar
             status={status}
             gatewayUrl={gatewayUrl}
             agentCount={agents.length}
-            viewMode={viewMode}
-            onViewModeChange={setViewMode}
             onConnectionSettings={() => setShowConnectionPanel((prev) => !prev)}
           />
         </div>
 
         {state.loading ? (
-          <div className="pointer-events-auto mx-auto w-full max-w-4xl">
+          <div className="w-full">
             <div className="glass-panel px-6 py-6 text-muted-foreground">
               Loading agents…
             </div>
@@ -2136,7 +2096,7 @@ const AgentCanvasPage = () => {
         ) : null}
 
         {connectionPanelVisible ? (
-          <div className="pointer-events-auto mx-auto w-full max-w-4xl">
+          <div className="w-full">
             <div className="glass-panel px-6 py-6">
               <ConnectionPanel
                 gatewayUrl={gatewayUrl}
@@ -2153,75 +2113,95 @@ const AgentCanvasPage = () => {
         ) : null}
 
         {errorMessage ? (
-          <div className="pointer-events-auto mx-auto w-full max-w-4xl">
+          <div className="w-full">
             <div className="rounded-lg border border-destructive bg-destructive px-4 py-2 text-sm text-destructive-foreground">
               {errorMessage}
             </div>
           </div>
         ) : null}
 
-        {viewMode === "focused" ? (
-          <div className="pointer-events-auto mx-auto flex min-h-0 w-full max-w-7xl flex-1 gap-4">
-            <FleetSidebar
-              agents={filteredAgents}
-              selectedAgentId={focusedAgent?.agentId ?? state.selectedAgentId}
-              filter={focusFilter}
-              onFilterChange={setFocusFilter}
-              onSelectAgent={(agentId) =>
-                dispatch({ type: "selectAgent", agentId })
-              }
-            />
-            <div
-              className="glass-panel min-h-0 flex-1 p-2"
-              data-testid="focused-agent-panel"
-            >
-              {focusedAgent ? (
-                <AgentTileCard
-                  tile={focusedAgent}
-                  isSelected={false}
-                  canSend={status === "connected"}
-                  onInspect={() => handleInspectTile(focusedAgent.agentId)}
-                  onNameChange={(name) =>
-                    handleRenameAgent(focusedAgent.agentId, name)
-                  }
-                  onDraftChange={(value) =>
-                    handleDraftChange(focusedAgent.agentId, value)
-                  }
-                  onSend={(message) =>
-                    handleSend(
-                      focusedAgent.agentId,
-                      focusedAgent.sessionKey,
-                      message
-                    )
-                  }
-                  onAvatarShuffle={() => handleAvatarShuffle(focusedAgent.agentId)}
-                  onNameShuffle={() => handleNameShuffle(focusedAgent.agentId)}
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
-                  {agents.length > 0
-                    ? "No agents match this filter."
-                    : "No agents available."}
-                </div>
-              )}
-            </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
+          <FleetSidebar
+            agents={filteredAgents}
+            selectedAgentId={focusedAgent?.agentId ?? state.selectedAgentId}
+            filter={focusFilter}
+            onFilterChange={setFocusFilter}
+            onSelectAgent={(agentId) =>
+              dispatch({ type: "selectAgent", agentId })
+            }
+          />
+          <div
+            className="glass-panel min-h-0 flex-1 p-2"
+            data-testid="focused-agent-panel"
+          >
+            {focusedAgent ? (
+              <AgentTileCard
+                tile={focusedAgent}
+                isSelected={false}
+                canSend={status === "connected"}
+                onInspect={() => handleInspectTile(focusedAgent.agentId)}
+                onNameChange={(name) =>
+                  handleRenameAgent(focusedAgent.agentId, name)
+                }
+                onDraftChange={(value) =>
+                  handleDraftChange(focusedAgent.agentId, value)
+                }
+                onSend={(message) =>
+                  handleSend(
+                    focusedAgent.agentId,
+                    focusedAgent.sessionKey,
+                    message
+                  )
+                }
+                onAvatarShuffle={() => handleAvatarShuffle(focusedAgent.agentId)}
+                onNameShuffle={() => handleNameShuffle(focusedAgent.agentId)}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+                {agents.length > 0
+                  ? "No agents match this filter."
+                  : "No agents available."}
+              </div>
+            )}
           </div>
-        ) : null}
+          {inspectTile ? (
+            <div className="glass-panel min-h-0 w-full shrink-0 overflow-hidden p-0 lg:min-w-[360px] lg:max-w-[420px]">
+              <AgentInspectPanel
+                key={inspectTile.agentId}
+                tile={inspectTile}
+                client={client}
+                models={gatewayModels}
+                onClose={() => setInspectAgentId(null)}
+                onDelete={() => handleDeleteAgent(inspectTile.agentId)}
+                onModelChange={(value) =>
+                  handleModelChange(inspectTile.agentId, inspectTile.sessionKey, value)
+                }
+                onThinkingChange={(value) =>
+                  handleThinkingChange(inspectTile.agentId, inspectTile.sessionKey, value)
+                }
+                onToolCallingToggle={(enabled) =>
+                  handleToolCallingToggle(inspectTile.agentId, enabled)
+                }
+                onThinkingTracesToggle={(enabled) =>
+                  handleThinkingTracesToggle(inspectTile.agentId, enabled)
+                }
+              />
+            </div>
+          ) : null}
+        </div>
 
-        {viewMode === "canvas" ? (
-          <div className="pointer-events-auto mt-auto flex justify-end">
+        {CANVAS_MODE_ENABLED ? (
+          <div className="mt-auto flex justify-end">
             <button
               type="button"
               className="inline-flex items-center gap-2 rounded-full border border-input bg-background px-4 py-2 text-sm font-semibold text-foreground shadow-sm transition hover:border-ring disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void handleCleanUpLayout()}
               disabled={agents.length === 0 || status !== "connected"}
             >
-              <BrushCleaning className="h-4 w-4" aria-hidden="true" />
               Clean up
             </button>
           </div>
         ) : null}
-
       </div>
     </div>
   );

@@ -78,31 +78,33 @@ const createStudioRoute = (
   };
 };
 
-test("switches_to_canvas_mode", async ({ page }) => {
-  await page.route("**/api/studio", createStudioRoute());
-  await page.goto("/");
+test.describe.skip("canvas mode is parked", () => {
+  test("switches_to_canvas_mode", async ({ page }) => {
+    await page.route("**/api/studio", createStudioRoute());
+    await page.goto("/");
 
-  await page.getByTestId("view-mode-canvas").click();
-  await expect(page.getByTestId("view-mode-canvas")).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("button", { name: "Clean up" })).toBeVisible();
-});
+    await page.getByTestId("view-mode-canvas").click();
+    await expect(page.getByTestId("view-mode-canvas")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Clean up" })).toBeVisible();
+  });
 
-test("retains_drag_capability", async ({ page }) => {
-  await page.route("**/api/studio", createStudioRoute());
-  await page.goto("/");
+  test("retains_drag_capability", async ({ page }) => {
+    await page.route("**/api/studio", createStudioRoute());
+    await page.goto("/");
 
-  await page.getByTestId("view-mode-canvas").click();
-  await expect(page.locator(".react-flow")).toBeVisible();
-  await expect(page.locator(".react-flow__controls")).toBeVisible();
-});
+    await page.getByTestId("view-mode-canvas").click();
+    await expect(page.locator(".react-flow")).toBeVisible();
+    await expect(page.locator(".react-flow__controls")).toBeVisible();
+  });
 
-test("view_mode_persists_across_reload", async ({ page }) => {
-  await page.route("**/api/studio", createStudioRoute());
-  await page.goto("/");
+  test("view_mode_persists_across_reload", async ({ page }) => {
+    await page.route("**/api/studio", createStudioRoute());
+    await page.goto("/");
 
-  await page.getByTestId("view-mode-canvas").click();
-  await expect(page.getByTestId("view-mode-canvas")).toHaveAttribute("aria-pressed", "true");
-  await page.waitForTimeout(450);
-  await page.reload();
-  await expect(page.getByTestId("view-mode-canvas")).toHaveAttribute("aria-pressed", "true");
+    await page.getByTestId("view-mode-canvas").click();
+    await expect(page.getByTestId("view-mode-canvas")).toHaveAttribute("aria-pressed", "true");
+    await page.waitForTimeout(450);
+    await page.reload();
+    await expect(page.getByTestId("view-mode-canvas")).toHaveAttribute("aria-pressed", "true");
+  });
 });

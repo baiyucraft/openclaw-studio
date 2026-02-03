@@ -23,7 +23,6 @@ test("loads focused workspace empty state", async ({ page }) => {
 
   await page.goto("/");
 
-  await expect(page.getByTestId("view-mode-focused")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("fleet-sidebar")).toBeVisible();
   await expect(page.getByTestId("focused-agent-panel")).toBeVisible();
 });
