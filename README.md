@@ -48,18 +48,12 @@ cp .env.example .env
 
 ## Workspace files
 
-Workspace files live on the **gateway** and are accessed through `POST /tools/invoke`. Make sure each agent is allowed to use the `read` and `write` tools, otherwise the Inspect panel will return 404.
+Workspace files live on the **gateway** and are accessed through `POST /tools/invoke`.
+The gateway build must expose the coding tools (`read`, `write`, `edit`, `apply_patch`) on that endpoint.
+If you see `Tool not available: read`, you are running a gateway build that does **not** include coding tools for `/tools/invoke`.
 
-Example (per agent):
-```json5
-{
-  agents: {
-    list: [
-      { id: "openclaw-studio", tools: { allow: ["read", "write"] } }
-    ]
-  }
-}
-```
+If you have restrictive tool allowlists configured, ensure the agent/tool policy permits:
+`read`, `write`, `edit`, and `apply_patch`.
 
 ## Configuration
 
@@ -100,18 +94,7 @@ Run both OpenClaw Studio and OpenClaw inside the same WSL2 distro. Use the WSL s
 - **Missing config**: Run `openclaw onboard` or set `OPENCLAW_CONFIG_PATH`
 - **Gateway unreachable**: Confirm the gateway is running and `NEXT_PUBLIC_GATEWAY_URL` matches
 - **Auth errors**: Check `gateway.auth.token` in `openclaw.json`
-- **Inspect returns 404**: The gateway tool policy is blocking `read`/`write`. Allow them per agent (see above), then restart the gateway.
-
-Example patch (per-agent allowlist):
-```bash
-openclaw gateway call config.get --params '{}' # capture payload.hash
-openclaw gateway call config.patch --params '{
-  "raw": "{\\n  agents: { list: [\\n    { id: \\"openclaw-studio\\", tools: { allow: [\\"read\\", \\"write\\"] } }\\n  ] }\\n}\\n",
-  "baseHash": "<hash-from-config.get>",
-  "note": "Allow read/write tools for studio",
-  "restartDelayMs": 1000
-}'
-```
+- **Inspect returns 404**: Your gateway build does not expose coding tools on `/tools/invoke`, or a tool allowlist is blocking them. Update the gateway build and ensure `read`/`write`/`edit`/`apply_patch` are allowed.
 
 ## Architecture
 
