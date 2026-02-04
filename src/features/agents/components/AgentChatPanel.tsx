@@ -1,17 +1,11 @@
-import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentState as AgentRecord } from "@/features/agents/state/store";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  isTraceMarkdown,
-  isToolMarkdown,
-  parseToolMarkdown,
-  stripTraceMarkdown,
-} from "@/lib/text/message-extract";
 import { normalizeAgentName } from "@/lib/names/agentNames";
 import { Shuffle } from "lucide-react";
 import { AgentAvatar } from "./AgentAvatar";
+import { buildAgentChatItems, summarizeToolLabel } from "./chatItems";
 
 type AgentChatPanelProps = {
   agent: AgentRecord;
@@ -23,24 +17,6 @@ type AgentChatPanelProps = {
   onSend: (message: string) => void;
   onAvatarShuffle: () => void;
   onNameShuffle: () => void;
-};
-
-const normalizeAssistantDisplayText = (value: string): string => {
-  const lines = value.replace(/\r\n?/g, "\n").split("\n");
-  const normalized: string[] = [];
-  let lastWasBlank = false;
-  for (const rawLine of lines) {
-    const line = rawLine.replace(/[ \t]+$/g, "");
-    if (line.trim().length === 0) {
-      if (lastWasBlank) continue;
-      normalized.push("");
-      lastWasBlank = true;
-      continue;
-    }
-    normalized.push(line);
-    lastWasBlank = false;
-  }
-  return normalized.join("\n").trim();
 };
 
 export const AgentChatPanel = ({
@@ -118,77 +94,23 @@ export const AgentChatPanel = ({
         ? "Error"
         : "Waiting for direction";
 
-  const liveThinkingTrace = agent.thinkingTrace?.trim() ?? "";
-
-  const chatItems = useMemo(() => {
-    const items: Array<
-      | { kind: "user"; text: string }
-      | { kind: "assistant"; text: string; live?: boolean }
-      | { kind: "tool"; text: string }
-    > = [];
-    for (const line of agent.outputLines) {
-      if (!line) continue;
-      if (isTraceMarkdown(line)) {
-        continue;
-      }
-      if (isToolMarkdown(line)) {
-        if (!agent.toolCallingEnabled) continue;
-        items.push({ kind: "tool", text: line });
-        continue;
-      }
-      const trimmed = line.trim();
-      if (trimmed.startsWith(">")) {
-        const text = trimmed.replace(/^>\s?/, "").trim();
-        if (text) items.push({ kind: "user", text });
-        continue;
-      }
-      const normalizedAssistant = normalizeAssistantDisplayText(line);
-      if (!normalizedAssistant) continue;
-      items.push({ kind: "assistant", text: normalizedAssistant });
-    }
-    const liveStream = agent.streamText?.trim();
-    if (liveStream) {
-      const normalizedStream = normalizeAssistantDisplayText(liveStream);
-      if (normalizedStream) {
-        items.push({ kind: "assistant", text: normalizedStream, live: true });
-      }
-    }
-    return items;
-  }, [
-    agent.outputLines,
-    agent.streamText,
-    agent.toolCallingEnabled,
-  ]);
-
-  const thinkingTraceSections = useMemo(() => {
-    if (!agent.showThinkingTraces) return [];
-    const sections: string[] = [];
-    for (const line of agent.outputLines) {
-      if (!isTraceMarkdown(line)) continue;
-      const text = stripTraceMarkdown(line).trim();
-      if (!text) continue;
-      if (sections[sections.length - 1] === text) continue;
-      sections.push(text);
-    }
-    if (liveThinkingTrace && sections[sections.length - 1] !== liveThinkingTrace) {
-      sections.push(liveThinkingTrace);
-    }
-    return sections;
-  }, [liveThinkingTrace, agent.outputLines, agent.showThinkingTraces]);
-
-  const thinkingTraceContent = useMemo(
-    () => thinkingTraceSections.join("\n\n"),
-    [thinkingTraceSections]
+  const chatItems = useMemo(
+    () =>
+      buildAgentChatItems({
+        outputLines: agent.outputLines,
+        streamText: agent.streamText,
+        liveThinkingTrace: agent.thinkingTrace?.trim() ?? "",
+        showThinkingTraces: agent.showThinkingTraces,
+        toolCallingEnabled: agent.toolCallingEnabled,
+      }),
+    [
+      agent.outputLines,
+      agent.streamText,
+      agent.thinkingTrace,
+      agent.showThinkingTraces,
+      agent.toolCallingEnabled,
+    ]
   );
-  const thinkingInsertIndex = useMemo(() => {
-    if (!thinkingTraceContent) return -1;
-    for (let index = chatItems.length - 1; index >= 0; index -= 1) {
-      if (chatItems[index]?.kind === "assistant") {
-        return index;
-      }
-    }
-    return chatItems.length;
-  }, [chatItems, thinkingTraceContent]);
 
   const avatarSeed = agent.avatarSeed ?? agent.agentId;
   return (
@@ -287,131 +209,66 @@ export const AgentChatPanel = ({
           }}
         >
           <div className="flex flex-col gap-3 text-xs text-foreground">
-            {chatItems.length === 0 && thinkingTraceSections.length === 0 ? (
+            {chatItems.length === 0 ? (
               <div className="text-xs text-muted-foreground">No messages yet.</div>
             ) : (
               <>
                 {chatItems.map((item, index) => {
-                  const showThinkingBefore = index === thinkingInsertIndex;
-                  if (item.kind === "user") {
+                  if (item.kind === "thinking") {
                     return (
-                      <div key={`chat-${agent.agentId}-user-wrap-${index}`} className="contents">
-                        {showThinkingBefore ? (
-                          <details
-                            className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground"
-                            open={agent.status === "running" && Boolean(liveThinkingTrace)}
-                          >
-                            <summary className="cursor-pointer select-none font-semibold">
-                              Thinking traces
-                            </summary>
-                            <div className="agent-markdown mt-1 text-foreground">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                {thinkingTraceContent}
-                              </ReactMarkdown>
-                            </div>
-                          </details>
-                        ) : null}
-                        <div
-                          key={`chat-${agent.agentId}-user-${index}`}
-                          className="rounded-md bg-muted/70 px-3 py-2 text-foreground"
-                        >
+                      <details
+                        key={`chat-${agent.agentId}-thinking-${index}`}
+                        className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground"
+                        open={item.live && agent.status === "running"}
+                      >
+                        <summary className="cursor-pointer select-none font-semibold">
+                          Thinking traces
+                        </summary>
+                        <div className="agent-markdown mt-1 text-foreground">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {`> ${item.text}`}
+                            {item.text}
                           </ReactMarkdown>
                         </div>
+                      </details>
+                    );
+                  }
+                  if (item.kind === "user") {
+                    return (
+                      <div
+                        key={`chat-${agent.agentId}-user-${index}`}
+                        className="rounded-md bg-muted/70 px-3 py-2 text-foreground"
+                      >
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{`> ${item.text}`}</ReactMarkdown>
                       </div>
                     );
                   }
                   if (item.kind === "tool") {
-                    const parsed = parseToolMarkdown(item.text);
-                    const summaryLabel =
-                      parsed.kind === "result" ? "Tool result" : "Tool call";
-                    const summaryText = parsed.label
-                      ? `${summaryLabel}: ${parsed.label}`
-                      : summaryLabel;
+                    const { summaryText, body } = summarizeToolLabel(item.text);
                     return (
-                      <div key={`chat-${agent.agentId}-tool-wrap-${index}`} className="contents">
-                        {showThinkingBefore ? (
-                          <details
-                            className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground"
-                            open={agent.status === "running" && Boolean(liveThinkingTrace)}
-                          >
-                            <summary className="cursor-pointer select-none font-semibold">
-                              Thinking traces
-                            </summary>
-                            <div className="agent-markdown mt-1 text-foreground">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                {thinkingTraceContent}
-                              </ReactMarkdown>
-                            </div>
-                          </details>
+                      <details
+                        key={`chat-${agent.agentId}-tool-${index}`}
+                        className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground"
+                      >
+                        <summary className="cursor-pointer select-none font-semibold">
+                          {summaryText}
+                        </summary>
+                        {body ? (
+                          <div className="agent-markdown mt-1 text-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                          </div>
                         ) : null}
-                        <details
-                          key={`chat-${agent.agentId}-tool-${index}`}
-                          className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground"
-                        >
-                          <summary className="cursor-pointer select-none font-semibold">
-                            {summaryText}
-                          </summary>
-                          {parsed.body ? (
-                            <div className="agent-markdown mt-1 text-foreground">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                {parsed.body}
-                              </ReactMarkdown>
-                            </div>
-                          ) : null}
-                        </details>
-                      </div>
+                      </details>
                     );
                   }
                   return (
                     <div
-                      key={`chat-${agent.agentId}-assistant-wrap-${index}`}
-                      className="contents"
+                      key={`chat-${agent.agentId}-assistant-${index}`}
+                      className={`agent-markdown ${item.live ? "opacity-80" : ""}`}
                     >
-                      {showThinkingBefore ? (
-                        <details
-                          className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground"
-                          open={agent.status === "running" && Boolean(liveThinkingTrace)}
-                        >
-                          <summary className="cursor-pointer select-none font-semibold">
-                            Thinking traces
-                          </summary>
-                          <div className="agent-markdown mt-1 text-foreground">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {thinkingTraceContent}
-                            </ReactMarkdown>
-                          </div>
-                        </details>
-                      ) : null}
-                      <div
-                        key={`chat-${agent.agentId}-assistant-${index}`}
-                        className={`agent-markdown ${
-                          item.live ? "opacity-80" : ""
-                        }`}
-                      >
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {item.text}
-                        </ReactMarkdown>
-                      </div>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
                     </div>
                   );
                 })}
-                {thinkingTraceContent && thinkingInsertIndex === chatItems.length ? (
-                  <details
-                    className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground"
-                    open={agent.status === "running" && Boolean(liveThinkingTrace)}
-                  >
-                    <summary className="cursor-pointer select-none font-semibold">
-                      Thinking traces
-                    </summary>
-                    <div className="agent-markdown mt-1 text-foreground">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {thinkingTraceContent}
-                      </ReactMarkdown>
-                    </div>
-                  </details>
-                ) : null}
               </>
             )}
           </div>
