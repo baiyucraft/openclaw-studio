@@ -38,4 +38,25 @@ describe("TaskBoard", () => {
     expect(screen.getByTestId("task-control-column-blocked")).toBeInTheDocument();
     expect(screen.getByText("Decision Needed")).toBeInTheDocument();
   });
+
+  it("renders Unknown update time when updatedAt is null", () => {
+    const snapshotWithUnknownUpdate: TaskControlPlaneSnapshot = {
+      ...snapshot,
+      columns: {
+        ...snapshot.columns,
+        ready: [
+          {
+            ...snapshot.columns.ready[0],
+            updatedAt: null,
+            decisionNeeded: false,
+            labels: [],
+          },
+        ],
+      },
+    };
+
+    render(createElement(TaskBoard, { snapshot: snapshotWithUnknownUpdate }));
+
+    expect(screen.getByText("Updated: Unknown update time")).toBeInTheDocument();
+  });
 });
