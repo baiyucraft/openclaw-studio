@@ -109,7 +109,7 @@ Flow:
 - **WebSocket gateway direct to client**: lowest latency for streaming; trade-off is tighter coupling to the gateway protocol in the UI.
 - **Gateway-first agent records**: records map 1:1 to `agents.list` entries with main sessions; trade-off is no local-only agent concept.
 - **Gateway-backed config + agent-file edits**: create/rename/heartbeat/delete via `config.patch`, agent files via gateway WebSocket `agents.files.get`/`agents.files.set`; trade-off is reliance on gateway availability.
-- **Narrow local config mutation boundary**: local `openclaw.json` writes are limited to explicit local-only flows (currently Discord provisioning), and reuse shared list helpers instead of ad-hoc mutation paths; trade-off is less flexibility for local-only experimentation, but clearer ownership and lower drift risk.
+- **Narrow local config mutation boundary**: Studio does not write `openclaw.json` directly today; if a local-only integration is introduced, keep any local writes narrowly scoped to that integration and reuse shared list helpers instead of ad-hoc mutation paths; trade-off is less flexibility for local-only experimentation, but clearer ownership and lower drift risk.
 - **Shared `agents.list` helper layer**: gateway and local config paths now consume one pure helper module for list parsing/writing/upsert behavior; trade-off is one more shared dependency, but it reduces semantic drift and duplicate bug surface.
 - **Single gateway settings endpoint**: `/api/studio` is the sole Studio gateway URL/token source; trade-off is migration pressure on any older local-config-based callers, but it removes ambiguous ownership and dead paths.
 - **Shared client settings coordinator module**: `src/lib/studio/coordinator.ts` now owns `/api/studio` transport plus load/schedule/flush behavior for gateway + focused state; trade-off is introducing a central client singleton, but it removes wrapper indirection and duplicate timers/fetch paths.
@@ -129,7 +129,7 @@ C4Context
   Person(user, "User", "Operates agents locally")
   System(ui, "OpenClaw Studio", "Next.js App Router UI")
   System_Ext(gateway, "OpenClaw Gateway", "WebSocket runtime")
-  System_Ext(fs, "Local Filesystem", "settings.json, optional openclaw.json")
+  System_Ext(fs, "Local Filesystem", "settings.json and other local reads (e.g. path suggestions)")
 
   Rel(user, ui, "Uses")
   Rel(ui, gateway, "WebSocket frames")
@@ -144,11 +144,11 @@ C4Container
 
   Container_Boundary(app, "Next.js App") {
     Container(client, "Client UI", "React", "Focused agent-management UI, state, gateway client")
-    Container(api, "API Routes", "Next.js route handlers", "Studio settings, gateway tools, task control plane, Discord")
+    Container(api, "API Routes", "Next.js route handlers", "Studio settings, path suggestions, task control plane")
   }
 
   Container_Ext(gateway, "Gateway", "WebSocket", "Agent runtime")
-  Container_Ext(fs, "Filesystem", "Local", "settings.json, optional openclaw.json")
+  Container_Ext(fs, "Filesystem", "Local", "settings.json and other local reads (e.g. path suggestions)")
 
   Rel(user, client, "Uses")
   Rel(client, api, "HTTP JSON")
@@ -162,7 +162,7 @@ C4Container
 - Do not write agent rename/heartbeat data directly to `openclaw.json`; use gateway `config.patch`.
 - Do not read/write agent files on the local filesystem; use the gateway tools proxy.
 - Do not add parallel gateway settings endpoints; `/api/studio` is the only supported Studio gateway URL/token path.
-- Do not add new generic local `openclaw.json` mutation wrappers for runtime agent-management flows; keep local writes constrained to explicit local-only integrations (for example, Discord provisioning).
+- Do not add new generic local `openclaw.json` mutation wrappers for runtime agent-management flows; if a local-only integration is introduced, keep any local writes narrowly scoped and well tested.
 - Do not store gateway tokens or secrets in client-side persistent storage.
 - Do not add new global mutable state outside `AgentStoreProvider` for agent UI data.
 - Do not silently swallow errors in API routes; always return actionable errors.
