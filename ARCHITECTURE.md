@@ -6,7 +6,6 @@ OpenClaw Studio is a gateway-first, single-user Next.js App Router UI for managi
 - Local persistence for gateway connection + focused-view preferences via a JSON settings file.
 - Direct integration with the OpenClaw runtime via a WebSocket gateway.
 - Gateway-backed edits for agent config and agent files.
-- Optional Discord channel provisioning for local gateways.
 
 Primary goals:
 - **Gateway-first**: agents, sessions, and config live in the gateway; Studio stores only UI settings.
@@ -34,9 +33,8 @@ This keeps feature cohesion high while preserving a clear client/server boundary
 - **Gateway-backed config + agent-file edits** (`src/lib/gateway/agentConfig.ts`, `src/features/agents/state/useAgentFilesEditor.ts`): agent create/rename/heartbeat/delete via `config.get` + `config.patch`, agent file read/write via gateway WebSocket methods (`agents.files.get`, `agents.files.set`).
 - **Heartbeat helpers** (`src/lib/gateway/agentConfig.ts`): resolves per-agent heartbeat state (enabled + schedule) by combining gateway config (`config.get`) and status (`status`) for the settings panel, triggers `wake` for “run now”, and owns the heartbeat type shapes and gateway config mutation helpers.
 - **Session lifecycle actions** (`src/features/agents/state/store.tsx`, `src/app/page.tsx`): per-agent “New session” calls gateway `sessions.reset` on the current session key and resets local runtime transcript state.
-- **Local OpenClaw config + paths** (`src/lib/clawdbot`): state/config/.env path resolution with `OPENCLAW_*` env overrides (`src/lib/clawdbot/paths.ts`). Local config access is used for optional Discord provisioning and local path/config helpers; shared local config list helpers live in `src/lib/clawdbot/config.ts` and are reused by Discord provisioning. Gateway URL/token in Studio are sourced from studio settings.
-- **Shared agent config-list helpers** (`src/lib/agents/configList.ts`): pure `agents.list` read/write/upsert helpers reused by both gateway config patching (`src/lib/gateway/agentConfig.ts`) and local config access (`src/lib/clawdbot/config.ts`) to keep list-shape semantics aligned.
-- **Discord integration** (`src/lib/discord`, API route): channel provisioning and config binding (local gateway only).
+- **Local OpenClaw config + paths** (`src/lib/clawdbot`): state/config path resolution with `OPENCLAW_*` env overrides (`src/lib/clawdbot/paths.ts`). Gateway URL/token in Studio are sourced from studio settings.
+- **Shared agent config-list helpers** (`src/lib/agents/configList.ts`): pure `agents.list` read/write/upsert helpers reused by gateway config patching (`src/lib/gateway/agentConfig.ts`) to keep list-shape semantics aligned.
 - **Task control plane** (`src/app/control-plane`, `src/app/api/task-control-plane`, `src/lib/task-control-plane/read-model.ts`): a read-only status board driven by Beads (`br`) JSON output. The API route is the server boundary for invoking `br` and parsing its JSON.
 - **Shared utilities** (`src/lib/*`): env, ids, names, avatars, message parsing/normalization (including tool-line formatting) in `src/lib/text/message-extract.ts`, cron types + selection helpers in `src/lib/cron/types.ts`, logging, filesystem helpers.
 
@@ -82,9 +80,8 @@ Flow:
 2. Agent file edits call gateway WebSocket methods `agents.files.get` and `agents.files.set` via `GatewayClient.call` (`src/features/agents/state/useAgentFilesEditor.ts`).
 3. UI reflects persisted state returned by the gateway.
 
-### 4) Cron summaries + settings controls + Discord provisioning
+### 4) Cron summaries + settings controls
 - **Cron**: the UI calls gateway cron methods directly (`cron.list`, `cron.run`, `cron.remove`) for latest-update previews and agent settings controls.
-- **Discord**: API route calls `createDiscordChannelForAgent`, uses `DISCORD_BOT_TOKEN` from the resolved state-dir `.env`, and updates local `openclaw.json` bindings.
 
 ### 5) Session settings synchronization
 - **UI boundary**: `AgentChatPanel` emits model/thinking callbacks from the agent header; `src/app/page.tsx` delegates both through one mutation helper.
@@ -133,12 +130,10 @@ C4Context
   System(ui, "OpenClaw Studio", "Next.js App Router UI")
   System_Ext(gateway, "OpenClaw Gateway", "WebSocket runtime")
   System_Ext(fs, "Local Filesystem", "settings.json, optional openclaw.json")
-  System_Ext(discord, "Discord API", "Optional channel provisioning")
 
   Rel(user, ui, "Uses")
   Rel(ui, gateway, "WebSocket frames")
   Rel(ui, fs, "HTTP to API routes -> fs read/write")
-  Rel(ui, discord, "HTTP via API route")
 ```
 
 ### C4 Level 2 (Containers/Components)
@@ -154,13 +149,11 @@ C4Container
 
   Container_Ext(gateway, "Gateway", "WebSocket", "Agent runtime")
   Container_Ext(fs, "Filesystem", "Local", "settings.json, optional openclaw.json")
-  Container_Ext(discord, "Discord API", "REST", "Channel provisioning")
 
   Rel(user, client, "Uses")
   Rel(client, api, "HTTP JSON")
   Rel(client, gateway, "WebSocket")
   Rel(api, fs, "Read/Write")
-  Rel(api, discord, "REST")
 ```
 
 ## Explicit forbidden patterns

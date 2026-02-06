@@ -74,8 +74,3 @@ export const resolveConfigPathCandidates = (
   }
   return candidates;
 };
-
-export const resolveClawdbotEnvPath = (
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir
-): string => path.join(resolveStateDir(env, homedir), ".env");
