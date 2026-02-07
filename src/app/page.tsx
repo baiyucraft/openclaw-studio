@@ -1708,6 +1708,12 @@ const AgentStudioPage = () => {
     async (agentId: string, sessionKey: string, message: string) => {
       const trimmed = message.trim();
       if (!trimmed) return;
+      const pendingDraftTimer = pendingDraftTimersRef.current.get(agentId) ?? null;
+      if (pendingDraftTimer !== null) {
+        window.clearTimeout(pendingDraftTimer);
+        pendingDraftTimersRef.current.delete(agentId);
+      }
+      pendingDraftValuesRef.current.delete(agentId);
       const isResetCommand = /^\/(reset|new)(\s|$)/i.test(trimmed);
       const runId = crypto.randomUUID();
       assistantStreamByRunRef.current.delete(runId);
