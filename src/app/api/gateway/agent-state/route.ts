@@ -1,11 +1,6 @@
-import * as childProcess from "node:child_process";
 import { NextResponse } from "next/server";
 
-import {
-  extractJsonErrorMessage,
-  parseJsonOutput,
-  resolveGatewaySshTarget,
-} from "@/lib/ssh/gateway-host";
+import { resolveGatewaySshTarget, runSshJson } from "@/lib/ssh/gateway-host";
 
 export const runtime = "nodejs";
 
@@ -19,34 +14,6 @@ type RestoreAgentStateRequest = {
 };
 
 const isSafeAgentId = (value: string) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value);
-
-const runSshBashJson = (options: {
-  sshTarget: string;
-  args: string[];
-  script: string;
-  label: string;
-}) => {
-  const result = childProcess.spawnSync(
-    "ssh",
-    ["-o", "BatchMode=yes", options.sshTarget, "bash", "-s", "--", ...options.args],
-    { encoding: "utf8", input: options.script }
-  );
-  if (result.error) {
-    throw new Error(`Failed to execute ssh: ${result.error.message}`);
-  }
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  if (result.status !== 0) {
-    const stderrText = stderr.trim();
-    const stdoutText = stdout.trim();
-    const message =
-      extractJsonErrorMessage(stdout) ??
-      extractJsonErrorMessage(stderr) ??
-      (stderrText || stdoutText || `Command failed (${options.label}).`);
-    throw new Error(message);
-  }
-  return parseJsonOutput(stdout, options.label);
-};
 
 const TRASH_SCRIPT = `
 set -euo pipefail
@@ -162,10 +129,10 @@ export async function POST(request: Request) {
     }
 
     const sshTarget = resolveGatewaySshTarget();
-    const result = runSshBashJson({
+    const result = runSshJson({
       sshTarget,
-      args: [trimmed],
-      script: TRASH_SCRIPT,
+      argv: ["bash", "-s", "--", trimmed],
+      input: TRASH_SCRIPT,
       label: `trash agent state (${trimmed})`,
     });
     return NextResponse.json({ result });
@@ -197,10 +164,10 @@ export async function PUT(request: Request) {
     }
 
     const sshTarget = resolveGatewaySshTarget();
-    const result = runSshBashJson({
+    const result = runSshJson({
       sshTarget,
-      args: [trimmedAgent, trimmedTrash],
-      script: RESTORE_SCRIPT,
+      argv: ["bash", "-s", "--", trimmedAgent, trimmedTrash],
+      input: RESTORE_SCRIPT,
       label: `restore agent state (${trimmedAgent})`,
     });
     return NextResponse.json({ result });
