@@ -53,6 +53,7 @@ export type GatewayRuntimeEventHandlerDeps = {
 
 export type GatewayRuntimeEventHandler = {
   handleEvent: (event: EventFrame) => void;
+  clearRunTracking: (runId?: string | null) => void;
   dispose: () => void;
 };
 
@@ -522,6 +523,21 @@ export function createGatewayRuntimeEventHandler(
 
   const handleEvent = (event: EventFrame) => {
     const eventKind = classifyGatewayEventKind(event.event);
+    if (eventKind === "summary-refresh") {
+      if (deps.getStatus() !== "connected") return;
+      if (event.event === "heartbeat") {
+        deps.bumpHeartbeatTick();
+        deps.refreshHeartbeatLatestUpdate();
+      }
+      if (summaryRefreshTimer !== null) {
+        deps.clearTimeout(summaryRefreshTimer);
+      }
+      summaryRefreshTimer = deps.setTimeout(() => {
+        summaryRefreshTimer = null;
+        void deps.loadSummarySnapshot();
+      }, 750);
+      return;
+    }
     if (eventKind === "runtime-chat") {
       const payload = event.payload as ChatEventPayload | undefined;
       if (!payload) return;
@@ -536,5 +552,5 @@ export function createGatewayRuntimeEventHandler(
     }
   };
 
-  return { handleEvent, dispose };
+  return { handleEvent, clearRunTracking, dispose };
 }

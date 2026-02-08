@@ -13,15 +13,8 @@ import { EmptyStatePanel } from "@/features/agents/components/EmptyStatePanel";
 import {
   buildAgentInstruction,
   extractText,
-  extractThinking,
-  extractThinkingFromTaggedStream,
-  formatThinkingMarkdown,
-  isTraceMarkdown,
   isHeartbeatPrompt,
-  isUiMetadataPrefix,
   stripUiMetadata,
-  extractToolLines,
-  formatToolCallMarkdown,
 } from "@/lib/text/message-extract";
 import { useGatewayConnection } from "@/lib/gateway/GatewayClient";
 import { createRafBatcher } from "@/lib/dom";
@@ -42,22 +35,12 @@ import {
 import {
   buildHistorySyncPatch,
   buildSummarySnapshotPatches,
-  classifyGatewayEventKind,
-  type AgentEventPayload,
-  type ChatEventPayload,
   type SummaryPreviewSnapshot,
   type SummarySnapshotAgent,
   type SummaryStatusSnapshot,
-  dedupeRunLines,
-  getAgentSummaryPatch,
-  getChatSummaryPatch,
-  isReasoningRuntimeAgentStream,
-  mergeRuntimeStream,
-  resolveAssistantCompletionTimestamp,
-  resolveLifecyclePatch,
-  shouldPublishAssistantStream,
 } from "@/features/agents/state/runtimeEventBridge";
 import type { AgentStoreSeed, AgentState } from "@/features/agents/state/store";
+import { createGatewayRuntimeEventHandler } from "@/features/agents/state/gatewayRuntimeEventHandler";
 import {
   type CronJobSummary,
   filterCronJobsForAgent,
@@ -189,38 +172,6 @@ const resolveSpecialUpdateKind = (message: string) => {
 const sortCronJobsByUpdatedAt = (jobs: CronJobSummary[]) =>
   [...jobs].sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 
-const extractReasoningBody = (value: string): string | null => {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const match = trimmed.match(/^reasoning:\s*([\s\S]*)$/i);
-  if (!match) return null;
-  const body = (match[1] ?? "").trim();
-  return body || null;
-};
-
-const resolveThinkingFromAgentStream = (
-  data: Record<string, unknown> | null,
-  rawStream: string,
-  opts?: { treatPlainTextAsThinking?: boolean }
-): string | null => {
-  if (data) {
-    const extracted = extractThinking(data);
-    if (extracted) return extracted;
-    const text = typeof data.text === "string" ? data.text : "";
-    const delta = typeof data.delta === "string" ? data.delta : "";
-    const prefixed = extractReasoningBody(text) ?? extractReasoningBody(delta);
-    if (prefixed) return prefixed;
-    if (opts?.treatPlainTextAsThinking) {
-      const cleanedDelta = delta.trim();
-      if (cleanedDelta) return cleanedDelta;
-      const cleanedText = text.trim();
-      if (cleanedText) return cleanedText;
-    }
-  }
-  const tagged = extractThinkingFromTaggedStream(rawStream);
-  return tagged || null;
-};
-
 const findLatestHeartbeatResponse = (messages: ChatHistoryMessage[]) => {
   let awaitingHeartbeatReply = false;
   let latestResponse: string | null = null;
@@ -239,16 +190,6 @@ const findLatestHeartbeatResponse = (messages: ChatHistoryMessage[]) => {
     }
   }
   return latestResponse;
-};
-
-const findAgentBySessionKey = (agents: AgentState[], sessionKey: string): string | null => {
-  const exact = agents.find((agent) => isSameSessionKey(agent.sessionKey, sessionKey));
-  return exact ? exact.agentId : null;
-};
-
-const findAgentByRunId = (agents: AgentState[], runId: string): string | null => {
-  const match = agents.find((agent) => agent.runId === runId);
-  return match ? match.agentId : null;
 };
 
 const resolveNextNewAgentName = (agents: AgentState[]) => {
@@ -288,7 +229,6 @@ const AgentStudioPage = () => {
   const historyInFlightRef = useRef<Set<string>>(new Set());
   const stateRef = useRef(state);
   const focusFilterTouchedRef = useRef(false);
-  const summaryRefreshRef = useRef<number | null>(null);
   const [gatewayModels, setGatewayModels] = useState<GatewayModelChoice[]>([]);
   const [gatewayModelsError, setGatewayModelsError] = useState<string | null>(null);
   const [gatewayConfigSnapshot, setGatewayConfigSnapshot] =
@@ -315,19 +255,16 @@ const AgentStudioPage = () => {
   const [activeConfigMutation, setActiveConfigMutation] = useState<QueuedConfigMutation | null>(
     null
   );
-  const thinkingDebugRef = useRef<Set<string>>(new Set());
-  const chatRunSeenRef = useRef<Set<string>>(new Set());
   const specialUpdateRef = useRef<Map<string, string>>(new Map());
   const specialUpdateInFlightRef = useRef<Set<string>>(new Set());
-  const toolLinesSeenRef = useRef<Map<string, Set<string>>>(new Map());
-  const assistantStreamByRunRef = useRef<Map<string, string>>(new Map());
-  const thinkingStreamByRunRef = useRef<Map<string, string>>(new Map());
   const pendingDraftValuesRef = useRef<Map<string, string>>(new Map());
   const pendingDraftTimersRef = useRef<Map<string, number>>(new Map());
   const pendingLivePatchesRef = useRef<Map<string, Partial<AgentState>>>(new Map());
   const flushLivePatchesRef = useRef<() => void>(() => {});
   const livePatchBatcherRef = useRef(createRafBatcher(() => flushLivePatchesRef.current()));
-  const lastActivityMarkRef = useRef<Map<string, number>>(new Map());
+  const runtimeEventHandlerRef = useRef<ReturnType<typeof createGatewayRuntimeEventHandler> | null>(
+    null
+  );
 
   const agents = state.agents;
   const selectedAgent = useMemo(() => getSelectedAgent(state), [state]);
@@ -412,11 +349,9 @@ const AgentStudioPage = () => {
   useEffect(() => {
     const batcher = livePatchBatcherRef.current;
     const pending = pendingLivePatchesRef.current;
-    const activityMarks = lastActivityMarkRef.current;
     return () => {
       batcher.cancel();
       pending.clear();
-      activityMarks.clear();
     };
   }, []);
 
@@ -441,16 +376,6 @@ const AgentStudioPage = () => {
     pendingLivePatchesRef.current.set(key, existing ? { ...existing, ...patch } : patch);
     livePatchBatcherRef.current.schedule();
   }, []);
-
-  const markActivityThrottled = useCallback(
-    (agentId: string, at: number = Date.now()) => {
-      const lastAt = lastActivityMarkRef.current.get(agentId) ?? 0;
-      if (at - lastAt < 300) return;
-      lastActivityMarkRef.current.set(agentId, at);
-      dispatch({ type: "markActivity", agentId, at });
-    },
-    [dispatch]
-  );
 
   const enqueueConfigMutation = useCallback(
     (params: {
@@ -493,73 +418,6 @@ const AgentStudioPage = () => {
     document.head.appendChild(link);
   }, [faviconHref]);
 
-  const summarizeThinkingMessage = useCallback((message: unknown) => {
-    if (!message || typeof message !== "object") {
-      return { type: typeof message };
-    }
-    const record = message as Record<string, unknown>;
-    const summary: Record<string, unknown> = { keys: Object.keys(record) };
-    const content = record.content;
-    if (Array.isArray(content)) {
-      summary.contentTypes = content.map((item) => {
-        if (item && typeof item === "object") {
-          const entry = item as Record<string, unknown>;
-          return typeof entry.type === "string" ? entry.type : "object";
-        }
-        return typeof item;
-      });
-    } else if (typeof content === "string") {
-      summary.contentLength = content.length;
-    }
-    if (typeof record.text === "string") {
-      summary.textLength = record.text.length;
-    }
-    for (const key of ["analysis", "reasoning", "thinking"]) {
-      const value = record[key];
-      if (typeof value === "string") {
-        summary[`${key}Length`] = value.length;
-      } else if (value && typeof value === "object") {
-        summary[`${key}Keys`] = Object.keys(value as Record<string, unknown>);
-      }
-    }
-    return summary;
-  }, []);
-
-  const appendUniqueToolLines = useCallback(
-    (agentId: string, runId: string | null | undefined, lines: string[]) => {
-      if (lines.length === 0) return;
-      if (!runId) {
-        for (const line of lines) {
-          dispatch({
-            type: "appendOutput",
-            agentId,
-            line,
-          });
-        }
-        return;
-      }
-      const map = toolLinesSeenRef.current;
-      const current = map.get(runId) ?? new Set<string>();
-      const { appended, nextSeen } = dedupeRunLines(current, lines);
-      map.set(runId, nextSeen);
-      for (const line of appended) {
-        dispatch({
-          type: "appendOutput",
-          agentId,
-          line,
-        });
-      }
-    },
-    [dispatch]
-  );
-
-  const clearRunTracking = useCallback((runId?: string | null) => {
-    if (!runId) return;
-    chatRunSeenRef.current.delete(runId);
-    assistantStreamByRunRef.current.delete(runId);
-    thinkingStreamByRunRef.current.delete(runId);
-    toolLinesSeenRef.current.delete(runId);
-  }, []);
 
   const resolveCronJobForAgent = useCallback((jobs: CronJobSummary[], agent: AgentState) => {
     return resolveLatestCronJobForAgent(jobs, agent.agentId);
@@ -1725,7 +1583,7 @@ const AgentStudioPage = () => {
         }
         await client.call("sessions.reset", { key: sessionKey });
         const patch = buildNewSessionAgentPatch(agent);
-        clearRunTracking(agent.runId);
+        runtimeEventHandlerRef.current?.clearRunTracking(agent.runId);
         historyInFlightRef.current.delete(sessionKey);
         specialUpdateRef.current.delete(agentId);
         specialUpdateInFlightRef.current.delete(agentId);
@@ -1746,7 +1604,7 @@ const AgentStudioPage = () => {
         });
       }
     },
-    [agents, clearRunTracking, client, dispatch, setError]
+    [agents, client, dispatch, setError]
   );
 
   useEffect(() => {
@@ -1776,7 +1634,7 @@ const AgentStudioPage = () => {
       pendingDraftValuesRef.current.delete(agentId);
       const isResetCommand = /^\/(reset|new)(\s|$)/i.test(trimmed);
       const runId = crypto.randomUUID();
-      assistantStreamByRunRef.current.delete(runId);
+      runtimeEventHandlerRef.current?.clearRunTracking(runId);
       const agent = stateRef.current.agents.find((entry) => entry.agentId === agentId);
       if (!agent) {
         dispatch({
@@ -1953,368 +1811,38 @@ const AgentStudioPage = () => {
   );
 
   useEffect(() => {
-    const unsubscribe = client.onEvent((event: EventFrame) => {
-      const eventKind = classifyGatewayEventKind(event.event);
-      if (eventKind === "summary-refresh") {
-        if (status !== "connected") return;
-        if (event.event === "heartbeat") {
-          setHeartbeatTick((prev) => prev + 1);
-          refreshHeartbeatLatestUpdate();
-        }
-        if (summaryRefreshRef.current !== null) {
-          window.clearTimeout(summaryRefreshRef.current);
-        }
-        summaryRefreshRef.current = window.setTimeout(() => {
-          summaryRefreshRef.current = null;
-          void loadSummarySnapshot();
-        }, 750);
-        return;
-      }
-      if (eventKind === "runtime-chat") {
-        const payload = event.payload as ChatEventPayload | undefined;
-        if (!payload?.sessionKey) return;
-        if (payload.runId) {
-          chatRunSeenRef.current.add(payload.runId);
-        }
-        const agentsSnapshot = stateRef.current.agents;
-        const agentId = findAgentBySessionKey(agentsSnapshot, payload.sessionKey);
-        if (!agentId) return;
-        const agent = agentsSnapshot.find((entry) => entry.agentId === agentId);
-        const role =
-          payload.message && typeof payload.message === "object"
-            ? (payload.message as Record<string, unknown>).role
-            : null;
-        const summaryPatch = getChatSummaryPatch(payload);
-        if (summaryPatch) {
-          dispatch({
-            type: "updateAgent",
-            agentId,
-            patch: {
-              ...summaryPatch,
-              sessionCreated: true,
-            },
-          });
-        }
-        if (role === "user" || role === "system") {
-          return;
-        }
-        markActivityThrottled(agentId);
-        const nextTextRaw = extractText(payload.message);
-        const nextText = nextTextRaw ? stripUiMetadata(nextTextRaw) : null;
-        const nextThinking = extractThinking(payload.message ?? payload);
-        const toolLines = extractToolLines(payload.message ?? payload);
-        const isToolRole = role === "tool" || role === "toolResult";
-        if (payload.state === "delta") {
-          if (typeof nextTextRaw === "string" && isUiMetadataPrefix(nextTextRaw.trim())) {
-            return;
-          }
-          appendUniqueToolLines(agentId, payload.runId ?? null, toolLines);
-          const patch: Partial<AgentState> = {};
-          if (nextThinking) {
-            patch.thinkingTrace = nextThinking;
-            patch.status = "running";
-          }
-          if (typeof nextText === "string") {
-            patch.streamText = nextText;
-            patch.status = "running";
-          }
-          if (Object.keys(patch).length > 0) {
-            queueLivePatch(agentId, patch);
-          }
-          return;
-        }
-
-        if (payload.state === "final") {
-          clearRunTracking(payload.runId ?? null);
-          if (
-            !nextThinking &&
-            role === "assistant" &&
-            !thinkingDebugRef.current.has(payload.sessionKey)
-          ) {
-            thinkingDebugRef.current.add(payload.sessionKey);
-            console.warn("No thinking trace extracted from chat event.", {
-              sessionKey: payload.sessionKey,
-              message: summarizeThinkingMessage(payload.message ?? payload),
-            });
-          }
-          const thinkingText = nextThinking ?? agent?.thinkingTrace ?? null;
-          const thinkingLine = thinkingText ? formatThinkingMarkdown(thinkingText) : "";
-          if (thinkingLine) {
-            dispatch({
-              type: "appendOutput",
-              agentId,
-              line: thinkingLine,
-            });
-          }
-          appendUniqueToolLines(agentId, payload.runId ?? null, toolLines);
-          if (
-            !thinkingLine &&
-            role === "assistant" &&
-            agent &&
-            !agent.outputLines.some((line) => isTraceMarkdown(line.trim()))
-          ) {
-            void loadAgentHistory(agentId);
-          }
-          if (!isToolRole && typeof nextText === "string") {
-            dispatch({
-              type: "appendOutput",
-              agentId,
-              line: nextText,
-            });
-            dispatch({
-              type: "updateAgent",
-              agentId,
-              patch: { lastResult: nextText },
-            });
-          }
-          const assistantCompletionAt = resolveAssistantCompletionTimestamp({
-            role,
-            state: payload.state,
-            message: payload.message,
-          });
-          if (agent?.lastUserMessage && !agent.latestOverride) {
-            void updateSpecialLatestUpdate(agentId, agent, agent.lastUserMessage);
-          }
-          dispatch({
-            type: "updateAgent",
-            agentId,
-            patch: {
-              streamText: null,
-              thinkingTrace: null,
-              ...(typeof assistantCompletionAt === "number"
-                ? { lastAssistantMessageAt: assistantCompletionAt }
-                : {}),
-            },
-          });
-          return;
-        }
-
-        if (payload.state === "aborted") {
-          clearRunTracking(payload.runId ?? null);
-          dispatch({
-            type: "appendOutput",
-            agentId,
-            line: "Run aborted.",
-          });
-          dispatch({
-            type: "updateAgent",
-            agentId,
-            patch: { streamText: null, thinkingTrace: null },
-          });
-          return;
-        }
-
-        if (payload.state === "error") {
-          clearRunTracking(payload.runId ?? null);
-          dispatch({
-            type: "appendOutput",
-            agentId,
-            line: payload.errorMessage ? `Error: ${payload.errorMessage}` : "Run error.",
-          });
-          dispatch({
-            type: "updateAgent",
-            agentId,
-            patch: { streamText: null, thinkingTrace: null },
-          });
-        }
-        return;
-      }
-
-      if (eventKind !== "runtime-agent") return;
-      const payload = event.payload as AgentEventPayload | undefined;
-      if (!payload?.runId) return;
-      const agentsSnapshot = stateRef.current.agents;
-      const directMatch = payload.sessionKey
-        ? findAgentBySessionKey(agentsSnapshot, payload.sessionKey)
-        : null;
-      const match = directMatch ?? findAgentByRunId(agentsSnapshot, payload.runId);
-      if (!match) return;
-      const agent = agentsSnapshot.find((entry) => entry.agentId === match);
-      if (!agent) return;
-      markActivityThrottled(match);
-      const stream = typeof payload.stream === "string" ? payload.stream : "";
-      const data =
-        payload.data && typeof payload.data === "object"
-          ? (payload.data as Record<string, unknown>)
-          : null;
-      const hasChatEvents = chatRunSeenRef.current.has(payload.runId);
-      if (isReasoningRuntimeAgentStream(stream)) {
-        const rawText = typeof data?.text === "string" ? (data.text as string) : "";
-        const rawDelta = typeof data?.delta === "string" ? (data.delta as string) : "";
-        const previousRaw = thinkingStreamByRunRef.current.get(payload.runId) ?? "";
-        let mergedRaw = previousRaw;
-        if (rawText) {
-          mergedRaw = rawText;
-        } else if (rawDelta) {
-          mergedRaw = mergeRuntimeStream(previousRaw, rawDelta);
-        }
-        if (mergedRaw) {
-          thinkingStreamByRunRef.current.set(payload.runId, mergedRaw);
-        }
-        const liveThinking =
-          resolveThinkingFromAgentStream(data, mergedRaw, { treatPlainTextAsThinking: true }) ??
-          (mergedRaw.trim() ? mergedRaw.trim() : null);
-        if (liveThinking) {
-          queueLivePatch(match, {
-            status: "running",
-            runId: payload.runId,
-            sessionCreated: true,
-            lastActivityAt: Date.now(),
-            thinkingTrace: liveThinking,
-          });
-        }
-        return;
-      }
-
-      if (stream === "assistant") {
-        const rawText = typeof data?.text === "string" ? data.text : "";
-        const rawDelta = typeof data?.delta === "string" ? data.delta : "";
-        const previousRaw = assistantStreamByRunRef.current.get(payload.runId) ?? "";
-        let mergedRaw = previousRaw;
-        if (rawText) {
-          mergedRaw = rawText;
-        } else if (rawDelta) {
-          mergedRaw = mergeRuntimeStream(previousRaw, rawDelta);
-        }
-        if (mergedRaw) {
-          assistantStreamByRunRef.current.set(payload.runId, mergedRaw);
-        }
-        const liveThinking = resolveThinkingFromAgentStream(data, mergedRaw);
-        const patch: Partial<AgentState> = {
-          status: "running",
-          runId: payload.runId,
-          lastActivityAt: Date.now(),
-          sessionCreated: true,
-        };
-        if (liveThinking) {
-          patch.thinkingTrace = liveThinking;
-        }
-        if (mergedRaw && (!rawText || !isUiMetadataPrefix(rawText.trim()))) {
-          const visibleText = extractText({ role: "assistant", content: mergedRaw }) ?? mergedRaw;
-          const cleaned = stripUiMetadata(visibleText);
-          if (
-            cleaned &&
-            shouldPublishAssistantStream({
-              mergedRaw,
-              rawText,
-              hasChatEvents,
-              currentStreamText: agent.streamText ?? null,
-            })
-          ) {
-            patch.streamText = cleaned;
-          }
-        }
-        queueLivePatch(match, patch);
-        return;
-      }
-
-      if (stream === "tool") {
-        const phase = typeof data?.phase === "string" ? data.phase : "";
-        const name = typeof data?.name === "string" ? data.name : "tool";
-        const toolCallId = typeof data?.toolCallId === "string" ? data.toolCallId : "";
-        if (phase && phase !== "result") {
-          const args =
-            (data?.arguments as unknown) ??
-            (data?.args as unknown) ??
-            (data?.input as unknown) ??
-            (data?.parameters as unknown) ??
-            null;
-          const line = formatToolCallMarkdown({
-            id: toolCallId || undefined,
-            name,
-            arguments: args,
-          });
-          if (line) {
-            appendUniqueToolLines(match, payload.runId, [line]);
-          }
-          return;
-        }
-        if (phase !== "result") return;
-        const result = data?.result;
-        const isError = typeof data?.isError === "boolean" ? data.isError : undefined;
-        const resultRecord =
-          result && typeof result === "object" ? (result as Record<string, unknown>) : null;
-        const details =
-          resultRecord && "details" in resultRecord ? resultRecord.details : undefined;
-        let content: unknown = result;
-        if (resultRecord) {
-          if (Array.isArray(resultRecord.content)) {
-            content = resultRecord.content;
-          } else if (typeof resultRecord.text === "string") {
-            content = resultRecord.text;
-          }
-        }
-        const message = {
-          role: "tool",
-          toolName: name,
-          toolCallId,
-          isError,
-          details,
-          content,
-        };
-        appendUniqueToolLines(match, payload.runId, extractToolLines(message));
-        return;
-      }
-
-      if (stream !== "lifecycle") return;
-      const summaryPatch = getAgentSummaryPatch(payload);
-      if (!summaryPatch) return;
-      const phase = typeof data?.phase === "string" ? data.phase : "";
-      if (phase !== "start" && phase !== "end" && phase !== "error") return;
-      const transition = resolveLifecyclePatch({
-        phase,
-        incomingRunId: payload.runId,
-        currentRunId: agent.runId,
-        lastActivityAt: summaryPatch.lastActivityAt ?? Date.now(),
-      });
-      if (transition.kind === "ignore") return;
-      if (phase === "end" && !hasChatEvents) {
-        const finalText = agent.streamText?.trim();
-        if (finalText) {
-          const assistantCompletionAt = Date.now();
-          dispatch({
-            type: "appendOutput",
-            agentId: match,
-            line: finalText,
-          });
-          dispatch({
-            type: "updateAgent",
-            agentId: match,
-            patch: {
-              lastResult: finalText,
-              lastAssistantMessageAt: assistantCompletionAt,
-            },
-          });
-        }
-      }
-      if (transition.clearRunTracking) {
-        clearRunTracking(payload.runId);
-      }
-      dispatch({
-        type: "updateAgent",
-        agentId: match,
-        patch: transition.patch,
-      });
+    const handler = createGatewayRuntimeEventHandler({
+      getStatus: () => status,
+      getAgents: () => stateRef.current.agents,
+      dispatch,
+      queueLivePatch,
+      loadSummarySnapshot,
+      loadAgentHistory,
+      refreshHeartbeatLatestUpdate,
+      bumpHeartbeatTick: () => setHeartbeatTick((prev) => prev + 1),
+      setTimeout: (fn, delayMs) => window.setTimeout(fn, delayMs),
+      clearTimeout: (id) => window.clearTimeout(id),
+      isDisconnectLikeError: isGatewayDisconnectLikeError,
+      logWarn: (message, meta) => console.warn(message, meta),
+      updateSpecialLatestUpdate: (agentId, agent, message) => {
+        void updateSpecialLatestUpdate(agentId, agent, message);
+      },
     });
+    runtimeEventHandlerRef.current = handler;
+    const unsubscribe = client.onEvent((event: EventFrame) => handler.handleEvent(event));
     return () => {
-      if (summaryRefreshRef.current !== null) {
-        window.clearTimeout(summaryRefreshRef.current);
-        summaryRefreshRef.current = null;
-      }
+      runtimeEventHandlerRef.current = null;
+      handler.dispose();
       unsubscribe();
     };
   }, [
-    appendUniqueToolLines,
-    clearRunTracking,
     client,
     dispatch,
     loadAgentHistory,
     loadSummarySnapshot,
-    markActivityThrottled,
     queueLivePatch,
     refreshHeartbeatLatestUpdate,
     status,
-    summarizeThinkingMessage,
     updateSpecialLatestUpdate,
   ]);
 
