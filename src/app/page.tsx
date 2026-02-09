@@ -47,13 +47,11 @@ import {
   formatCronJobDisplay,
   listCronJobs,
   removeCronJob,
-  removeCronJobsForAgent,
   resolveLatestCronJobForAgent,
   runCronJobNow,
 } from "@/lib/cron/types";
 import {
   createGatewayAgent,
-  deleteGatewayAgent,
   renameGatewayAgent,
   removeGatewayHeartbeatOverride,
   listHeartbeatsForAgent,
@@ -74,11 +72,7 @@ import {
 } from "@/lib/gateway/GatewayClient";
 import { fetchJson } from "@/lib/http";
 import { bootstrapAgentBrainFilesFromTemplate } from "@/lib/gateway/agentFiles";
-import {
-  runDeleteAgentTransaction,
-  type RestoreAgentStateResult,
-  type TrashAgentStateResult,
-} from "@/features/agents/operations/deleteAgentTransaction";
+import { deleteAgentViaStudio } from "@/features/agents/operations/deleteAgentOperation";
 
 type ChatHistoryMessage = Record<string, unknown>;
 
@@ -1196,40 +1190,12 @@ const AgentStudioPage = () => {
                 phase: "deleting",
               };
             });
-            await runDeleteAgentTransaction(
-              {
-                trashAgentState: async (agentId) => {
-                  const { result } = await fetchJson<{ result: TrashAgentStateResult }>(
-                    "/api/gateway/agent-state",
-                    {
-                      method: "POST",
-                      headers: { "content-type": "application/json" },
-                      body: JSON.stringify({ agentId }),
-                    }
-                  );
-                  return result;
-                },
-                restoreAgentState: async (agentId, trashDir) => {
-                  const { result } = await fetchJson<{ result: RestoreAgentStateResult }>(
-                    "/api/gateway/agent-state",
-                    {
-                      method: "PUT",
-                      headers: { "content-type": "application/json" },
-                      body: JSON.stringify({ agentId, trashDir }),
-                    }
-                  );
-                  return result;
-                },
-                removeCronJobsForAgent: async (agentId) => {
-                  await removeCronJobsForAgent(client, agentId);
-                },
-                deleteGatewayAgent: async (agentId) => {
-                  await deleteGatewayAgent({ client, agentId });
-                },
-                logError: (message, error) => console.error(message, error),
-              },
-              agentId
-            );
+	            await deleteAgentViaStudio({
+	              client,
+	              agentId,
+	              fetchJson,
+	              logError: (message, error) => console.error(message, error),
+	            });
             setSettingsAgentId(null);
             setDeleteAgentBlock((current) => {
               if (!current || current.agentId !== agentId) return current;
