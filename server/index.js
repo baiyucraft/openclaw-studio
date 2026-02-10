@@ -49,6 +49,7 @@ async function main() {
   });
 
   await app.prepare();
+  const handleUpgrade = app.getUpgradeHandler();
 
   const server = http.createServer((req, res) => {
     if (accessGate.handleHttp(req, res)) return;
@@ -56,7 +57,11 @@ async function main() {
   });
 
   server.on("upgrade", (req, socket, head) => {
-    proxy.handleUpgrade(req, socket, head);
+    if (resolvePathname(req.url) === "/api/gateway/ws") {
+      proxy.handleUpgrade(req, socket, head);
+      return;
+    }
+    handleUpgrade(req, socket, head);
   });
 
   server.listen(port, hostname, () => {
