@@ -9,6 +9,7 @@ import {
 import { FleetSidebar } from "@/features/agents/components/FleetSidebar";
 import { HeaderBar } from "@/features/agents/components/HeaderBar";
 import { ConnectionPanel } from "@/features/agents/components/ConnectionPanel";
+import { GatewayConnectScreen } from "@/features/agents/components/GatewayConnectScreen";
 import { EmptyStatePanel } from "@/features/agents/components/EmptyStatePanel";
 import {
   extractText,
@@ -196,6 +197,7 @@ const AgentStudioPage = () => {
   const [focusFilter, setFocusFilter] = useState<FocusFilter>("all");
   const [focusedPreferencesLoaded, setFocusedPreferencesLoaded] = useState(false);
   const [agentsLoadedOnce, setAgentsLoadedOnce] = useState(false);
+  const [didAttemptGatewayConnect, setDidAttemptGatewayConnect] = useState(false);
   const [heartbeatTick, setHeartbeatTick] = useState(0);
   const historyInFlightRef = useRef<Set<string>>(new Set());
   const stateRef = useRef(state);
@@ -1709,7 +1711,19 @@ const AgentStudioPage = () => {
           : "Gateway restart in progress"
       : null;
 
-  if (status === "connecting" || (status === "connected" && !agentsLoadedOnce)) {
+  useEffect(() => {
+    if (status === "connecting") {
+      setDidAttemptGatewayConnect(true);
+    }
+  }, [status]);
+
+  useEffect(() => {
+    if (gatewayError) {
+      setDidAttemptGatewayConnect(true);
+    }
+  }, [gatewayError]);
+
+  if (!agentsLoadedOnce && (!didAttemptGatewayConnect || status === "connecting")) {
     return (
       <div className="relative min-h-screen w-screen overflow-hidden bg-background">
         <div className="flex min-h-screen items-center justify-center px-6">
@@ -1718,8 +1732,51 @@ const AgentStudioPage = () => {
               OpenClaw Studio
             </div>
             <div className="mt-3 text-sm text-muted-foreground">
-              {status === "connecting" ? "Connecting to gateway…" : "Loading agents…"}
+              {status === "connecting" ? "Connecting to gateway…" : "Booting Studio…"}
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "disconnected" && !agentsLoadedOnce && didAttemptGatewayConnect) {
+    return (
+      <div className="relative min-h-screen w-screen overflow-hidden bg-background">
+        <div className="relative z-10 flex h-screen flex-col gap-4 px-3 py-3 sm:px-4 sm:py-4 md:px-6 md:py-6">
+          <div className="w-full">
+            <HeaderBar
+              status={status}
+              onConnectionSettings={() => setShowConnectionPanel(true)}
+              onBrainFiles={handleBrainToggle}
+              brainFilesOpen={brainPanelOpen}
+              brainDisabled
+            />
+          </div>
+          <GatewayConnectScreen
+            gatewayUrl={gatewayUrl}
+            token={token}
+            status={status}
+            error={gatewayError}
+            onGatewayUrlChange={setGatewayUrl}
+            onTokenChange={setToken}
+            onConnect={() => void connect()}
+            onDisconnect={disconnect}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "connected" && !agentsLoadedOnce) {
+    return (
+      <div className="relative min-h-screen w-screen overflow-hidden bg-background">
+        <div className="flex min-h-screen items-center justify-center px-6">
+          <div className="glass-panel w-full max-w-md px-6 py-6 text-center">
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              OpenClaw Studio
+            </div>
+            <div className="mt-3 text-sm text-muted-foreground">Loading agents…</div>
           </div>
         </div>
       </div>

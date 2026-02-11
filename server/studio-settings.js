@@ -57,6 +57,30 @@ const readJsonFile = (filePath) => {
 };
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
+const OPENCLAW_CONFIG_FILENAME = "openclaw.json";
+
+const isRecord = (value) => Boolean(value && typeof value === "object");
+
+const readOpenclawGatewayDefaults = (env = process.env) => {
+  try {
+    const stateDir = resolveStateDir(env);
+    const configPath = path.join(stateDir, OPENCLAW_CONFIG_FILENAME);
+    const parsed = readJsonFile(configPath);
+    if (!isRecord(parsed)) return null;
+    const gateway = isRecord(parsed.gateway) ? parsed.gateway : null;
+    if (!gateway) return null;
+    const auth = isRecord(gateway.auth) ? gateway.auth : null;
+    const token = typeof auth?.token === "string" ? auth.token.trim() : "";
+    const port =
+      typeof gateway.port === "number" && Number.isFinite(gateway.port) ? gateway.port : null;
+    if (!token) return null;
+    const url = port ? `ws://127.0.0.1:${port}` : "";
+    if (!url) return null;
+    return { url, token };
+  } catch {
+    return null;
+  }
+};
 
 const loadUpstreamGatewaySettings = (env = process.env) => {
   const settingsPath = resolveStudioSettingsPath(env);
@@ -64,6 +88,16 @@ const loadUpstreamGatewaySettings = (env = process.env) => {
   const gateway = parsed && typeof parsed === "object" ? parsed.gateway : null;
   const url = typeof gateway?.url === "string" ? gateway.url.trim() : "";
   const token = typeof gateway?.token === "string" ? gateway.token.trim() : "";
+  if (!token) {
+    const defaults = readOpenclawGatewayDefaults(env);
+    if (defaults) {
+      return {
+        url: url || defaults.url,
+        token: defaults.token,
+        settingsPath,
+      };
+    }
+  }
   return {
     url: url || DEFAULT_GATEWAY_URL,
     token,
@@ -76,4 +110,3 @@ module.exports = {
   resolveStudioSettingsPath,
   loadUpstreamGatewaySettings,
 };
-
