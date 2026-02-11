@@ -533,6 +533,7 @@ type UseAgentFilesEditorResult = {
   setAgentFileContent: (value: string) => void;
   handleAgentFileTabChange: (nextTab: AgentFileName) => Promise<void>;
   saveAgentFiles: () => Promise<boolean>;
+  reloadAgentFiles: () => Promise<void>;
 };
 
 const useAgentFilesEditor = (params: {
@@ -671,6 +672,7 @@ const useAgentFilesEditor = (params: {
     setAgentFileContent,
     handleAgentFileTabChange,
     saveAgentFiles,
+    reloadAgentFiles: loadAgentFiles,
   };
 };
 
@@ -698,6 +700,7 @@ export const AgentBrainPanel = ({
     setAgentFileContent,
     handleAgentFileTabChange,
     saveAgentFiles,
+    reloadAgentFiles,
   } = useAgentFilesEditor({ client, agentId: selectedAgent?.agentId ?? null });
   const [previewMode, setPreviewMode] = useState(true);
 
@@ -770,6 +773,17 @@ export const AgentBrainPanel = ({
           </div>
 
           <div className="mt-3 flex items-center justify-end gap-1">
+            <button
+              type="button"
+              className="rounded-md border border-border/70 bg-card/60 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground transition hover:bg-muted/70 disabled:opacity-50"
+              disabled={agentFilesLoading || agentFilesSaving || agentFilesDirty}
+              onClick={() => {
+                void reloadAgentFiles();
+              }}
+              title={agentFilesDirty ? "Save changes before reloading." : "Reload from gateway"}
+            >
+              Reload
+            </button>
             <button
               type="button"
               className={`rounded-md border px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] transition ${
