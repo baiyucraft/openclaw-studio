@@ -297,8 +297,14 @@ export const syncGatewaySessionSettings = async ({
   return await client.call<GatewaySessionsPatchResult>("sessions.patch", payload);
 };
 
+const doctorFixHint =
+  "Run `npx openclaw doctor --fix` on the gateway host (or `pnpm openclaw doctor --fix` in a source checkout).";
+
 const formatGatewayError = (error: unknown) => {
   if (error instanceof GatewayResponseError) {
+    if (error.code === "INVALID_REQUEST" && /invalid config/i.test(error.message)) {
+      return `Gateway error (${error.code}): ${error.message}. ${doctorFixHint}`;
+    }
     return `Gateway error (${error.code}): ${error.message}`;
   }
   if (error instanceof Error) {
