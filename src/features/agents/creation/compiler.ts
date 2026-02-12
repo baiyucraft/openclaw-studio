@@ -1,6 +1,10 @@
 import type { AgentFileName } from "@/lib/agents/agentFiles";
 import type {
   AgentControlLevel,
+  AgentPresetBundle,
+  GuidedPresetBundleDefinition,
+  GuidedPresetCapabilitySummary,
+  GuidedPresetRiskLevel,
   AgentStarterKit,
   GuidedAgentCreationCompileResult,
   GuidedAgentCreationDraft,
@@ -185,8 +189,78 @@ const CONTROL_DEFAULTS: Record<AgentControlLevel, ControlDefaults> = {
   },
 };
 
+export const GUIDED_PRESET_BUNDLES: GuidedPresetBundleDefinition[] = [
+  {
+    id: "research-analyst",
+    group: "knowledge",
+    title: "Research Analyst",
+    description: "Evidence-first synthesis with conservative controls.",
+    starterKit: "researcher",
+    controlLevel: "conservative",
+    heartbeatEnabled: false,
+  },
+  {
+    id: "pr-engineer",
+    group: "builder",
+    title: "PR Engineer",
+    description: "Safe code changes with bounded runtime execution.",
+    starterKit: "engineer",
+    controlLevel: "balanced",
+    heartbeatEnabled: false,
+  },
+  {
+    id: "autonomous-engineer",
+    group: "builder",
+    title: "Autonomous Engineer",
+    description: "High-autonomy coding with broad execution permissions.",
+    starterKit: "engineer",
+    controlLevel: "autopilot",
+    heartbeatEnabled: false,
+  },
+  {
+    id: "growth-operator",
+    group: "operations",
+    title: "Growth Operator",
+    description: "Campaign drafting defaults with recurring review cadence.",
+    starterKit: "marketer",
+    controlLevel: "balanced",
+    heartbeatEnabled: true,
+  },
+  {
+    id: "coordinator",
+    group: "operations",
+    title: "Coordinator",
+    description: "Follow-up and planning support with low-risk defaults.",
+    starterKit: "chief-of-staff",
+    controlLevel: "balanced",
+    heartbeatEnabled: true,
+  },
+  {
+    id: "blank",
+    group: "baseline",
+    title: "Blank",
+    description: "General-purpose baseline with conservative controls.",
+    starterKit: "blank",
+    controlLevel: "conservative",
+    heartbeatEnabled: false,
+  },
+];
+
+const PRESET_BUNDLE_BY_ID: Record<AgentPresetBundle, GuidedPresetBundleDefinition> = {
+  "research-analyst": GUIDED_PRESET_BUNDLES[0],
+  "pr-engineer": GUIDED_PRESET_BUNDLES[1],
+  "autonomous-engineer": GUIDED_PRESET_BUNDLES[2],
+  "growth-operator": GUIDED_PRESET_BUNDLES[3],
+  coordinator: GUIDED_PRESET_BUNDLES[4],
+  blank: GUIDED_PRESET_BUNDLES[5],
+};
+
 const resolveStarterTemplate = (starterKit: AgentStarterKit): StarterTemplate =>
   STARTER_TEMPLATES[starterKit] ?? STARTER_TEMPLATES.engineer;
+
+export const resolveGuidedPresetBundle = (
+  bundle: AgentPresetBundle
+): GuidedPresetBundleDefinition => PRESET_BUNDLE_BY_ID[bundle] ?? PRESET_BUNDLE_BY_ID["pr-engineer"];
 
 export const resolveGuidedControlsForPreset = (params: {
   starterKit: AgentStarterKit;
@@ -210,21 +284,125 @@ export const resolveGuidedControlsForPreset = (params: {
   };
 };
 
-export const createDefaultGuidedDraft = (): GuidedAgentCreationDraft => ({
-  starterKit: "engineer",
-  controlLevel: "balanced",
-  firstTask: "",
-  customInstructions: "",
-  userProfile: "",
-  toolNotes: "",
-  memoryNotes: "",
-  heartbeatEnabled: false,
-  heartbeatChecklist: [...defaultHeartbeatChecklist],
-  controls: resolveGuidedControlsForPreset({
+export const resolveGuidedDraftFromPresetBundle = (params: {
+  bundle: AgentPresetBundle;
+  seed: GuidedAgentCreationDraft;
+}): GuidedAgentCreationDraft => {
+  const bundle = resolveGuidedPresetBundle(params.bundle);
+  return {
+    ...params.seed,
+    starterKit: bundle.starterKit,
+    controlLevel: bundle.controlLevel,
+    heartbeatEnabled: bundle.heartbeatEnabled,
+    controls: resolveGuidedControlsForPreset({
+      starterKit: bundle.starterKit,
+      controlLevel: bundle.controlLevel,
+    }),
+  };
+};
+
+const TOOL_PROFILE_BASE_ENTRIES: Record<GuidedCreationControls["toolsProfile"], string[]> = {
+  minimal: ["session_status"],
+  coding: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
+  messaging: ["group:messaging", "sessions_list", "sessions_history", "sessions_send", "session_status"],
+  full: ["*"],
+};
+
+const hasGroupCapability = (params: {
+  controls: GuidedCreationControls;
+  group: string;
+}): boolean => {
+  const deny = new Set(normalizeLineList(params.controls.toolsDeny));
+  if (deny.has(params.group)) return false;
+  if (params.controls.toolsProfile === "full") return true;
+  const allow = new Set([
+    ...TOOL_PROFILE_BASE_ENTRIES[params.controls.toolsProfile],
+    ...normalizeLineList(params.controls.toolsAllow),
+  ]);
+  return allow.has("*") || allow.has(params.group);
+};
+
+const derivePresetRiskLevel = (controls: GuidedCreationControls): GuidedPresetRiskLevel => {
+  if (
+    controls.execAutonomy === "auto" ||
+    controls.fileEditAutonomy === "auto-edit" ||
+    controls.sandboxMode === "all" ||
+    controls.workspaceAccess === "rw" ||
+    controls.approvalSecurity === "full" ||
+    controls.approvalAsk === "off"
+  ) {
+    return "high";
+  }
+  if (controls.allowExec || controls.approvalAsk === "on-miss") {
+    return "moderate";
+  }
+  return "low";
+};
+
+export const deriveGuidedPresetCapabilitySummary = (params: {
+  controls: GuidedCreationControls;
+  heartbeatEnabled: boolean;
+}): GuidedPresetCapabilitySummary => {
+  const { controls } = params;
+  const internetEnabled = hasGroupCapability({ controls, group: "group:web" });
+  const fileSystemEnabled = hasGroupCapability({ controls, group: "group:fs" });
+  const execEnabled = controls.allowExec;
+  const heartbeatEnabled = params.heartbeatEnabled;
+  const caveats: string[] = [];
+  if (controls.sandboxMode === "non-main") {
+    caveats.push("Sandbox mode non-main does not sandbox the agent main session.");
+  }
+  return {
+    chips: [
+      { id: "exec", label: "Exec", value: execEnabled ? "On" : "Off", enabled: execEnabled },
+      {
+        id: "internet",
+        label: "Internet",
+        value: internetEnabled ? "On" : "Off",
+        enabled: internetEnabled,
+      },
+      {
+        id: "filesystem",
+        label: "File tools",
+        value: fileSystemEnabled ? "On" : "Off",
+        enabled: fileSystemEnabled,
+      },
+      {
+        id: "sandbox",
+        label: "Sandbox",
+        value: controls.sandboxMode,
+        enabled: controls.sandboxMode !== "off",
+      },
+      {
+        id: "heartbeat",
+        label: "Heartbeat",
+        value: heartbeatEnabled ? "On" : "Off",
+        enabled: heartbeatEnabled,
+      },
+    ],
+    risk: derivePresetRiskLevel(controls),
+    caveats,
+  };
+};
+
+export const createDefaultGuidedDraft = (): GuidedAgentCreationDraft => {
+  const seed: GuidedAgentCreationDraft = {
     starterKit: "engineer",
     controlLevel: "balanced",
-  }),
-});
+    firstTask: "",
+    customInstructions: "",
+    userProfile: "",
+    toolNotes: "",
+    memoryNotes: "",
+    heartbeatEnabled: false,
+    heartbeatChecklist: [...defaultHeartbeatChecklist],
+    controls: resolveGuidedControlsForPreset({
+      starterKit: "engineer",
+      controlLevel: "balanced",
+    }),
+  };
+  return resolveGuidedDraftFromPresetBundle({ bundle: "pr-engineer", seed });
+};
 
 export const compileGuidedAgentCreation = (params: {
   name: string;

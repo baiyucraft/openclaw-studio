@@ -12,6 +12,44 @@ export type AgentStarterKit =
   | "chief-of-staff"
   | "blank";
 export type AgentControlLevel = "conservative" | "balanced" | "autopilot";
+export type AgentPresetBundle =
+  | "research-analyst"
+  | "pr-engineer"
+  | "autonomous-engineer"
+  | "growth-operator"
+  | "coordinator"
+  | "blank";
+export type AgentPresetBundleGroup = "knowledge" | "builder" | "operations" | "baseline";
+export type GuidedPresetRiskLevel = "low" | "moderate" | "high";
+export type GuidedPresetCapabilityChipId =
+  | "exec"
+  | "internet"
+  | "filesystem"
+  | "sandbox"
+  | "heartbeat";
+
+export type GuidedPresetCapabilityChip = {
+  id: GuidedPresetCapabilityChipId;
+  label: string;
+  value: string;
+  enabled: boolean;
+};
+
+export type GuidedPresetCapabilitySummary = {
+  chips: GuidedPresetCapabilityChip[];
+  risk: GuidedPresetRiskLevel;
+  caveats: string[];
+};
+
+export type GuidedPresetBundleDefinition = {
+  id: AgentPresetBundle;
+  group: AgentPresetBundleGroup;
+  title: string;
+  description: string;
+  starterKit: AgentStarterKit;
+  controlLevel: AgentControlLevel;
+  heartbeatEnabled: boolean;
+};
 
 export type GuidedExecAutonomy = "ask-first" | "auto";
 export type GuidedFileEditAutonomy = "propose-only" | "auto-edit";

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   compileGuidedAgentCreation,
   createDefaultGuidedDraft,
+  deriveGuidedPresetCapabilitySummary,
   resolveGuidedControlsForPreset,
+  resolveGuidedDraftFromPresetBundle,
 } from "@/features/agents/creation/compiler";
 import type { GuidedAgentCreationDraft } from "@/features/agents/creation/types";
 
@@ -117,5 +119,87 @@ describe("compileGuidedAgentCreation", () => {
     });
 
     expect(result.validation.errors).toContain("Auto exec requires runtime tools to be enabled.");
+  });
+
+  it("maps PR Engineer bundle to engineer + balanced defaults", () => {
+    const draft = resolveGuidedDraftFromPresetBundle({
+      bundle: "pr-engineer",
+      seed: createDefaultGuidedDraft(),
+    });
+
+    expect(draft.starterKit).toBe("engineer");
+    expect(draft.controlLevel).toBe("balanced");
+    expect(draft.controls.toolsProfile).toBe("coding");
+    expect(draft.controls.allowExec).toBe(true);
+    expect(draft.controls.sandboxMode).toBe("non-main");
+    expect(draft.controls.workspaceAccess).toBe("ro");
+    expect(draft.heartbeatEnabled).toBe(false);
+  });
+
+  it("maps Autonomous Engineer bundle to engineer + autopilot defaults", () => {
+    const draft = resolveGuidedDraftFromPresetBundle({
+      bundle: "autonomous-engineer",
+      seed: createDefaultGuidedDraft(),
+    });
+
+    expect(draft.starterKit).toBe("engineer");
+    expect(draft.controlLevel).toBe("autopilot");
+    expect(draft.controls.allowExec).toBe(true);
+    expect(draft.controls.execAutonomy).toBe("auto");
+    expect(draft.controls.fileEditAutonomy).toBe("auto-edit");
+    expect(draft.controls.sandboxMode).toBe("all");
+    expect(draft.controls.workspaceAccess).toBe("rw");
+  });
+
+  it("derives capability chips from controls", () => {
+    const draft = resolveGuidedDraftFromPresetBundle({
+      bundle: "pr-engineer",
+      seed: createDefaultGuidedDraft(),
+    });
+    const capability = deriveGuidedPresetCapabilitySummary({
+      controls: draft.controls,
+      heartbeatEnabled: draft.heartbeatEnabled,
+    });
+
+    expect(capability.risk).toBe("moderate");
+    expect(capability.chips).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "exec", label: "Exec", enabled: true, value: "On" }),
+        expect.objectContaining({ id: "internet", label: "Internet", enabled: false, value: "Off" }),
+        expect.objectContaining({
+          id: "filesystem",
+          label: "File tools",
+          enabled: true,
+          value: "On",
+        }),
+        expect.objectContaining({
+          id: "sandbox",
+          label: "Sandbox",
+          enabled: true,
+          value: "non-main",
+        }),
+        expect.objectContaining({
+          id: "heartbeat",
+          label: "Heartbeat",
+          enabled: false,
+          value: "Off",
+        }),
+      ])
+    );
+  });
+
+  it("flags main-session caveat when sandbox mode is non-main", () => {
+    const draft = resolveGuidedDraftFromPresetBundle({
+      bundle: "research-analyst",
+      seed: createDefaultGuidedDraft(),
+    });
+    const capability = deriveGuidedPresetCapabilitySummary({
+      controls: draft.controls,
+      heartbeatEnabled: draft.heartbeatEnabled,
+    });
+
+    expect(capability.caveats).toContain(
+      "Sandbox mode non-main does not sandbox the agent main session."
+    );
   });
 });
