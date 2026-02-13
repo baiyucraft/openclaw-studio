@@ -6,10 +6,15 @@ export type MutationWorkflowResult = {
   disposition: "completed" | "awaiting-restart";
 };
 
+export type AwaitingRestartPatch = {
+  phase: "awaiting-restart";
+  sawDisconnect: boolean;
+};
+
 export type MutationWorkflowPostRunEffects = {
   shouldReloadAgents: boolean;
   shouldClearBlock: boolean;
-  awaitingRestartPatch: MutationStatusBlock | null;
+  awaitingRestartPatch: AwaitingRestartPatch | null;
 };
 
 export type MutationWorkflowDeps = {
@@ -84,9 +89,9 @@ export const resolveConfigMutationStatusLine = (params: {
     : "Gateway restart in progress";
 };
 
-export const buildAwaitingRestartPatch = () => {
+export const buildAwaitingRestartPatch = (): AwaitingRestartPatch => {
   return {
-    phase: "awaiting-restart" as const,
+    phase: "awaiting-restart",
     sawDisconnect: false,
   };
 };
