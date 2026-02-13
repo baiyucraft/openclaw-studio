@@ -171,7 +171,6 @@ describe("summarizeToolLabel", () => {
     });
 
     const { summaryText: callSummary } = summarizeToolLabel(toolCallLine);
-    expect(callSummary).toContain("EXEC");
     expect(callSummary).toContain("gh auth status");
     expect(callSummary).not.toContain("call_");
 
@@ -184,7 +183,6 @@ describe("summarizeToolLabel", () => {
     });
 
     const { summaryText: resultSummary } = summarizeToolLabel(toolResultLine);
-    expect(resultSummary).toContain("EXEC");
     expect(resultSummary).toContain("completed");
     expect(resultSummary).toContain("exit 0");
     expect(resultSummary).not.toContain("call_");

@@ -320,6 +320,12 @@ const extractToolMetaLine = (body: string): string | null => {
   return meta;
 };
 
+const extractFirstCodeBlockLine = (body: string): string | null => {
+  const match = body.match(/```[a-zA-Z0-9_-]*\r?\n([^\r\n]+)\r?\n/);
+  const line = (match?.[1] ?? "").trim();
+  return line ? truncateInline(line, 96) : null;
+};
+
 const extractToolArgSummary = (body: string): string | null => {
   const matchers: Array<[RegExp, (m: RegExpMatchArray) => string | null]> = [
     [/"command"\s*:\s*"([^"]+)"/, (m) => (m[1] ? m[1] : null)],
@@ -341,7 +347,14 @@ export const summarizeToolLabel = (line: string): { summaryText: string; body: s
   const metaLine = parsed.kind === "result" ? extractToolMetaLine(parsed.body) : null;
   const argSummary = parsed.kind === "call" ? extractToolArgSummary(parsed.body) : null;
   const suffix = metaLine ?? argSummary;
-  const summaryText = suffix ? `${toolName} · ${suffix}` : toolName;
+  const toolIsExec = toolName === "EXEC";
+  const execSummary =
+    parsed.kind === "call"
+      ? argSummary
+      : metaLine ?? extractFirstCodeBlockLine(parsed.body);
+  const summaryText = toolIsExec
+    ? (execSummary ?? metaLine ?? toolName)
+    : (suffix ? `${toolName} · ${suffix}` : toolName);
   return {
     summaryText,
     body: parsed.body,
