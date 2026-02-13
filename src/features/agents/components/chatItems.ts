@@ -28,6 +28,15 @@ export type BuildAgentChatItemsInput = {
   toolCallingEnabled: boolean;
 };
 
+const coerceToolMarkdownToAssistantText = (line: string): string | null => {
+  const parsed = parseToolMarkdown(line);
+  if (parsed.kind !== "result") return null;
+  const label = parsed.label.trim().toLowerCase();
+  if (!label.startsWith("exec")) return null;
+  const body = parsed.body.trim();
+  return body || null;
+};
+
 export const normalizeAssistantDisplayText = (value: string): string => {
   const lines = value.replace(/\r\n?/g, "\n").split("\n");
   const normalized: string[] = [];
@@ -112,7 +121,22 @@ export const buildFinalAgentChatItems = ({
       continue;
     }
     if (isToolMarkdown(line)) {
-      if (!toolCallingEnabled) continue;
+      if (!toolCallingEnabled) {
+        const coerced = coerceToolMarkdownToAssistantText(line);
+        if (coerced) {
+          items.push({
+            kind: "assistant",
+            text: normalizeAssistantDisplayText(coerced),
+            ...(currentMeta
+              ? {
+                  timestampMs: currentMeta.timestampMs,
+                  thinkingDurationMs: currentMeta.thinkingDurationMs,
+                }
+              : {}),
+          });
+        }
+        continue;
+      }
       items.push({
         kind: "tool",
         text: line,
@@ -234,7 +258,22 @@ export const buildAgentChatItems = ({
       continue;
     }
     if (isToolMarkdown(line)) {
-      if (!toolCallingEnabled) continue;
+      if (!toolCallingEnabled) {
+        const coerced = coerceToolMarkdownToAssistantText(line);
+        if (coerced) {
+          items.push({
+            kind: "assistant",
+            text: normalizeAssistantDisplayText(coerced),
+            ...(currentMeta
+              ? {
+                  timestampMs: currentMeta.timestampMs,
+                  thinkingDurationMs: currentMeta.thinkingDurationMs,
+                }
+              : {}),
+          });
+        }
+        continue;
+      }
       items.push({
         kind: "tool",
         text: line,
