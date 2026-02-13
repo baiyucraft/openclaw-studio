@@ -30,6 +30,9 @@ export type AgentStoreSeed = {
   avatarUrl?: string | null;
   model?: string | null;
   thinkingLevel?: string | null;
+  sessionExecHost?: "sandbox" | "gateway" | "node";
+  sessionExecSecurity?: "deny" | "allowlist" | "full";
+  sessionExecAsk?: "off" | "on-miss" | "always";
   toolCallingEnabled?: boolean;
   showThinkingTraces?: boolean;
 };
@@ -178,6 +181,9 @@ const createRuntimeAgentState = (
     avatarUrl: seed.avatarUrl ?? existing?.avatarUrl ?? null,
     model: seed.model ?? existing?.model ?? null,
     thinkingLevel: seed.thinkingLevel ?? existing?.thinkingLevel ?? "high",
+    sessionExecHost: seed.sessionExecHost ?? existing?.sessionExecHost,
+    sessionExecSecurity: seed.sessionExecSecurity ?? existing?.sessionExecSecurity,
+    sessionExecAsk: seed.sessionExecAsk ?? existing?.sessionExecAsk,
     status: sameSessionKey ? (existing?.status ?? "idle") : "idle",
     sessionCreated: sameSessionKey ? (existing?.sessionCreated ?? false) : false,
     awaitingUserInput: sameSessionKey ? (existing?.awaitingUserInput ?? false) : false,

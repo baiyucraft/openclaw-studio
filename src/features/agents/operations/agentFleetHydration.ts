@@ -39,10 +39,55 @@ type SessionsListEntry = {
   thinkingLevel?: string;
   modelProvider?: string;
   model?: string;
+  execHost?: string | null;
+  execSecurity?: string | null;
+  execAsk?: string | null;
 };
 
 type SessionsListResult = {
   sessions?: SessionsListEntry[];
+};
+
+type ExecHost = "sandbox" | "gateway" | "node";
+type ExecSecurity = "deny" | "allowlist" | "full";
+type ExecAsk = "off" | "on-miss" | "always";
+
+type ExecApprovalsSnapshot = {
+  file?: {
+    agents?: Record<string, { security?: string | null; ask?: string | null }>;
+  };
+};
+
+type ExecPolicyEntry = {
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+};
+
+const normalizeExecHost = (raw: string | null | undefined): ExecHost | undefined => {
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
+    return normalized;
+  }
+  return undefined;
+};
+
+const normalizeExecSecurity = (raw: string | null | undefined): ExecSecurity | undefined => {
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
+    return normalized;
+  }
+  return undefined;
+};
+
+const normalizeExecAsk = (raw: string | null | undefined): ExecAsk | undefined => {
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+    return normalized;
+  }
+  return undefined;
 };
 
 const resolveAgentName = (agent: AgentsListResult["agents"][number]) => {
@@ -96,6 +141,7 @@ const resolveDefaultModelForAgent = (
 export type HydrateAgentFleetResult = {
   seeds: AgentStoreSeed[];
   sessionCreatedAgentIds: string[];
+  sessionSettingsSyncedAgentIds: string[];
   summaryPatches: SummarySnapshotPatch[];
   suggestedSelectedAgentId: string | null;
   configSnapshot: GatewayModelPolicySnapshot | null;
@@ -135,6 +181,29 @@ export async function hydrateAgentFleetFromGateway(params: {
     }
   }
 
+  let execApprovalsSnapshot: ExecApprovalsSnapshot | null = null;
+  try {
+    execApprovalsSnapshot = (await params.client.call(
+      "exec.approvals.get",
+      {}
+    )) as ExecApprovalsSnapshot;
+  } catch (err) {
+    if (!params.isDisconnectLikeError(err)) {
+      logError("Failed to load exec approvals while loading agents.", err);
+    }
+  }
+  const execPolicyByAgentId = new Map<string, ExecPolicyEntry>();
+  const execAgents = execApprovalsSnapshot?.file?.agents ?? {};
+  for (const [agentId, entry] of Object.entries(execAgents)) {
+    const normalizedSecurity = normalizeExecSecurity(entry?.security);
+    const normalizedAsk = normalizeExecAsk(entry?.ask);
+    if (!normalizedSecurity && !normalizedAsk) continue;
+    execPolicyByAgentId.set(agentId, {
+      security: normalizedSecurity,
+      ask: normalizedAsk,
+    });
+  }
+
   const agentsResult = (await params.client.call("agents.list", {})) as AgentsListResult;
   const mainKey = agentsResult.mainKey?.trim() || "main";
 
@@ -163,6 +232,7 @@ export async function hydrateAgentFleetFromGateway(params: {
     })
   );
 
+  const needsSessionSettingsSync = new Set<string>();
   const seeds: AgentStoreSeed[] = agentsResult.agents.map((agent) => {
     const persistedSeed = settings && gatewayKey ? resolveAgentAvatarSeed(settings, gatewayKey, agent.id) : null;
     const avatarSeed = persistedSeed ?? agent.id;
@@ -176,6 +246,22 @@ export async function hydrateAgentFleetFromGateway(params: {
         ? `${modelProvider}/${modelId}`
         : resolveDefaultModelForAgent(agent.id, configSnapshot);
     const thinkingLevel = typeof mainSession?.thinkingLevel === "string" ? mainSession.thinkingLevel : null;
+    const sessionExecHost = normalizeExecHost(mainSession?.execHost);
+    const sessionExecSecurity = normalizeExecSecurity(mainSession?.execSecurity);
+    const sessionExecAsk = normalizeExecAsk(mainSession?.execAsk);
+    const policy = execPolicyByAgentId.get(agent.id);
+    const resolvedExecSecurity = sessionExecSecurity ?? policy?.security;
+    const resolvedExecAsk = sessionExecAsk ?? policy?.ask;
+    const resolvedExecHost =
+      sessionExecHost ?? (resolvedExecSecurity || resolvedExecAsk ? "gateway" : undefined);
+    const expectsExecOverrides = Boolean(resolvedExecHost || resolvedExecSecurity || resolvedExecAsk);
+    const hasMatchingExecOverrides =
+      sessionExecHost === resolvedExecHost &&
+      sessionExecSecurity === resolvedExecSecurity &&
+      sessionExecAsk === resolvedExecAsk;
+    if (expectsExecOverrides && !hasMatchingExecOverrides) {
+      needsSessionSettingsSync.add(agent.id);
+    }
     return {
       agentId: agent.id,
       name,
@@ -184,14 +270,21 @@ export async function hydrateAgentFleetFromGateway(params: {
       avatarUrl,
       model,
       thinkingLevel,
+      sessionExecHost: resolvedExecHost,
+      sessionExecSecurity: resolvedExecSecurity,
+      sessionExecAsk: resolvedExecAsk,
     };
   });
 
   const sessionCreatedAgentIds: string[] = [];
+  const sessionSettingsSyncedAgentIds: string[] = [];
   for (const seed of seeds) {
     const mainSession = mainSessionKeyByAgent.get(seed.agentId) ?? null;
     if (!mainSession) continue;
     sessionCreatedAgentIds.push(seed.agentId);
+    if (!needsSessionSettingsSync.has(seed.agentId)) {
+      sessionSettingsSyncedAgentIds.push(seed.agentId);
+    }
   }
 
   let summaryPatches: SummarySnapshotPatch[] = [];
@@ -255,9 +348,9 @@ export async function hydrateAgentFleetFromGateway(params: {
   return {
     seeds,
     sessionCreatedAgentIds,
+    sessionSettingsSyncedAgentIds,
     summaryPatches,
     suggestedSelectedAgentId,
     configSnapshot: configSnapshot ?? null,
   };
 }
-

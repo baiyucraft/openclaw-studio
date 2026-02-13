@@ -118,11 +118,62 @@ describe("sendChatMessageViaStudio", () => {
 
     const methods = call.mock.calls.map((entry) => entry[0]);
     expect(methods).toEqual(["sessions.patch", "chat.send"]);
+    expect(call).toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({
+        key: agent.sessionKey,
+        model: "openai/gpt-5",
+        thinkingLevel: "medium",
+      })
+    );
     expect(dispatch).toHaveBeenCalledWith({
       type: "updateAgent",
       agentId: agent.agentId,
       patch: { sessionSettingsSynced: true, sessionCreated: true },
     });
+  });
+
+  it("syncs exec session overrides for ask-first agents", async () => {
+    const agent = createAgent({
+      sessionSettingsSynced: false,
+      sessionCreated: false,
+      sessionExecHost: "gateway",
+      sessionExecSecurity: "allowlist",
+      sessionExecAsk: "always",
+    });
+    const dispatch = vi.fn();
+    const call = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: agent.sessionKey,
+          entry: { thinkingLevel: "medium" },
+          resolved: { modelProvider: "openai", model: "gpt-5" },
+        };
+      }
+      return { ok: true };
+    });
+
+    await sendChatMessageViaStudio({
+      client: { call },
+      dispatch,
+      getAgent: () => agent,
+      agentId: agent.agentId,
+      sessionKey: agent.sessionKey,
+      message: "hello",
+      now: () => 1234,
+      generateRunId: () => "run-1",
+    });
+
+    expect(call).toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({
+        key: agent.sessionKey,
+        execHost: "gateway",
+        execSecurity: "allowlist",
+        execAsk: "always",
+      })
+    );
   });
 
   it("does_not_sync_session_settings_when_already_synced", async () => {

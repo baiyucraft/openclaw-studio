@@ -118,6 +118,9 @@ export async function sendChatMessageViaStudio(params: {
         sessionKey: params.sessionKey,
         model: agent.model ?? null,
         thinkingLevel: agent.thinkingLevel ?? null,
+        execHost: agent.sessionExecHost,
+        execSecurity: agent.sessionExecSecurity,
+        execAsk: agent.sessionExecAsk,
       });
       createdSession = true;
       params.dispatch({

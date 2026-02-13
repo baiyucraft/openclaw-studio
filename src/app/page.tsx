@@ -700,11 +700,15 @@ const AgentStudioPage = () => {
         setGatewayConfigSnapshot(result.configSnapshot);
       }
       hydrateAgents(result.seeds);
+      const sessionSettingsSyncedAgentIds = new Set(result.sessionSettingsSyncedAgentIds);
       for (const agentId of result.sessionCreatedAgentIds) {
         dispatch({
           type: "updateAgent",
           agentId,
-          patch: { sessionCreated: true, sessionSettingsSynced: true },
+          patch: {
+            sessionCreated: true,
+            sessionSettingsSynced: sessionSettingsSyncedAgentIds.has(agentId),
+          },
         });
       }
       for (const entry of result.summaryPatches) {
