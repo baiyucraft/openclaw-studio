@@ -67,6 +67,28 @@ Notes:
 - The browser never opens a WebSocket directly to the upstream Gateway URL. The browser always speaks to the Studio same-origin bridge at `/api/gateway/ws` (computed by `src/lib/gateway/proxy-url.ts`).
 - The “upstream gateway URL” shown in Studio settings is used by the Studio server (the proxy) to open the upstream connection.
 
+## End-To-End Flow (PI Run -> UI)
+
+This is the “happy path” you want in your head when debugging:
+
+1. User types in the chat composer and hits Send (`src/features/agents/components/AgentChatPanel.tsx`).
+2. Studio calls `chat.send` with `sessionKey` and `idempotencyKey = runId` (`src/features/agents/operations/chatSendOperation.ts`).
+3. Gateway runs the agent (PI) for that session.
+4. While the run is executing, the Gateway may stream:
+   - `event: "agent"` frames for live partial output (`stream: "assistant"`), live thinking (`reason*`/`think*` streams), tool calls/results (`stream: "tool"`), and lifecycle (`stream: "lifecycle"`).
+   - `event: "chat"` frames for the chat message stream (`state: "delta" | "final" | ...`).
+5. Studio merges those events into:
+   - live fields (`streamText`, `thinkingTrace`) via batched `queueLivePatch` (fast UI updates without committing to the transcript yet)
+   - committed transcript lines (`outputLines`) via `appendOutput` (final messages, tool lines, meta/timestamp, thinking trace)
+6. The chat panel renders:
+   - historical transcript from `outputLines`
+   - an extra “live assistant” card at the bottom built from `streamText` + `thinkingTrace` while `status === "running"`.
+
+The key wiring is in:
+- Event subscription + dispatch: `src/app/page.tsx`
+- Runtime event handler: `src/features/agents/state/gatewayRuntimeEventHandler.ts`
+- Store reducer: `src/features/agents/state/store.tsx`
+
 ## Studio Settings (Where Gateway URL/Token Come From)
 
 Studio persists Gateway connection settings on the Studio host (not in browser storage). The UI loads them into browser memory at runtime:
@@ -81,6 +103,10 @@ Files:
 
 Connection note:
 - In the browser, `useGatewayConnection()` stores the upstream URL/token in memory (loaded from `/api/studio`) but connects the WebSocket to Studio via `resolveStudioProxyGatewayUrl()`; the upstream URL is passed as `authScopeKey` (not as the WebSocket URL). See `src/lib/gateway/GatewayClient.ts`.
+
+Token resolution note:
+- The Studio server resolves an upstream token from `openclaw-studio/settings.json`, and if it is missing it may fall back to the local OpenClaw config in `openclaw.json` (token + port). See `server/studio-settings.js`.
+- The WS proxy currently requires an upstream token to be available from the Studio host settings resolver even if the browser `connect` frame includes a token. See the `studio.gateway_token_missing` check in `server/gateway-proxy.js`.
 
 ## WebSocket Frame Shapes
 
@@ -102,6 +128,7 @@ The first *protocol frame* from the browser must be `req(connect)`. The WS proxy
 - Rejects non-`connect` frames until connected.
 - Opens an upstream WS to the configured Gateway URL.
 - Injects `auth.token` into the connect params if the connect frame does not already contain a token, and if it does not include a device signature.
+- Sets an `Origin` header for the upstream WebSocket derived from the upstream URL (and normalizes loopback hostnames to `localhost`).
 
 Code:
 - Connect enforcement + token injection: `server/gateway-proxy.js`
@@ -113,6 +140,7 @@ On failure to load settings or open upstream, the proxy sends an error `res` for
 Important detail (how errors become actionable in the UI):
 - The browser-side Gateway client (`src/lib/gateway/openclaw/GatewayBrowserClient.ts`) closes the WebSocket with close code `4008` and a reason like `connect failed: <CODE> <MESSAGE>` after it receives a failed `res(connect)`. `GatewayClient.connect()` parses that close into `GatewayResponseError(code, message)` for UI retry policy and user-facing errors.
 - Separately, the proxy may also close with `1011` / `connect failed`; the “connect failed: …” close reason that the UI parses is produced by the browser client, not the proxy.
+- WebSocket close reasons are truncated to 123 UTF-8 bytes in the browser client to avoid protocol errors on long messages.
 
 Error codes used by the proxy include:
 - `studio.gateway_url_missing`
@@ -121,6 +149,13 @@ Error codes used by the proxy include:
 - `studio.settings_load_failed`
 - `studio.upstream_error`
 - `studio.upstream_closed`
+
+## Reconnects And Retries
+
+There are two layers of retry behavior:
+
+- Transport reconnect: the vendored browser client reconnects the browser->Studio WebSocket with backoff when it closes, and continues emitting events after reconnect. See `src/lib/gateway/openclaw/GatewayBrowserClient.ts`.
+- Connect failure retry: when the initial `connect` handshake fails (for example bad token), `useGatewayConnection()` may schedule a limited auto-retry unless the error code is known non-retryable. See `resolveGatewayAutoRetryDelayMs` in `src/lib/gateway/GatewayClient.ts`.
 
 ## Optional Studio Access Gate
 
@@ -142,6 +177,16 @@ Studio classifies gateway events by `event` name:
 Code:
 - Classification: `src/features/agents/state/runtimeEventBridge.ts`
 - Execution: `src/features/agents/state/gatewayRuntimeEventHandler.ts`
+
+## Live Fields vs Committed Transcript (Why Streaming Can “Look Weird”)
+
+Studio intentionally separates:
+- Live streaming UI: `AgentState.streamText` and `AgentState.thinkingTrace` are updated via `queueLivePatch`, which batches patches and coalesces multiple deltas before they hit React state (`src/app/page.tsx`).
+- Committed transcript: `AgentState.outputLines` is appended via `appendOutput`. These are the lines that become the durable on-screen transcript and are later merged with `chat.history` results (`src/features/agents/state/store.tsx`).
+
+This split is why you can see:
+- “live” assistant output update rapidly at the bottom card during a run
+- then a finalized assistant message (plus tool lines / thinking trace / meta timestamp) appear in the transcript on `final`
 
 ### `event: "chat"` payload
 
@@ -217,6 +262,14 @@ Files:
 - Session settings sync transport: `src/lib/gateway/GatewayClient.ts`
 - Stop call site: `src/app/page.tsx`
 
+## Post-Connect Side Effects (Local Gateway Only)
+
+After a successful connection, Studio may mutate gateway config when the upstream gateway URL is local:
+- It reads `config.get` and may write `config.set` to ensure `gateway.reload.mode` is `"hot"` for local Studio usage.
+
+File:
+- Reload mode enforcement: `src/lib/gateway/gatewayReloadMode.ts`
+
 ## Sequence Gaps (Dropped Events)
 
 Gateway event frames may include `seq`. The vendored browser client tracks `seq` and reports gaps (`expected`, `received`) via `onGap`.
@@ -236,6 +289,7 @@ Studio can fetch history via `chat.history` and merge it into the transcript.
 Key points:
 - Studio intentionally treats gateway history as canonical for timestamps/final ordering.
 - History merge is designed to avoid duplicates and reconcile local optimistic sends.
+- History parsing intentionally skips some system-ish content (heartbeat prompts, restart sentinel messages, and UI metadata prefixes). See `buildHistoryLines()` in `src/features/agents/state/runtimeEventBridge.ts`.
 - Transcript v2 can be toggled with `NEXT_PUBLIC_STUDIO_TRANSCRIPT_V2`.
 - Transcript debug logs can be enabled with `NEXT_PUBLIC_STUDIO_TRANSCRIPT_DEBUG`.
 
