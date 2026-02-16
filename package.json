@@ -15,7 +15,8 @@
     "smoke:dev-server": "node scripts/smoke-dev-server.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "pw:open:max": "scripts/playwright-open-maximized.sh"
   },
   "dependencies": {
     "@multiavatar/multiavatar": "github:multiavatar/Multiavatar",
