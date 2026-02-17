@@ -175,16 +175,50 @@ const ExecApprovalCard = memo(function ExecApprovalCard({
   );
 });
 
+const ToolCallDetails = memo(function ToolCallDetails({
+  line,
+  className,
+}: {
+  line: string;
+  className?: string;
+}) {
+  const { summaryText, body } = summarizeToolLabel(line);
+  return (
+    <details
+      className={
+        className ??
+        `w-full ${ASSISTANT_MAX_WIDTH_EXPANDED_CLASS} ${ASSISTANT_GUTTER_CLASS} self-start rounded-[8px] border border-border/70 bg-surface-3 px-2 py-1 text-[10px] text-muted-foreground`
+      }
+    >
+      <summary className="cursor-pointer select-none font-mono text-[10px] font-semibold tracking-[0.11em]">
+        {summaryText}
+      </summary>
+      {body ? (
+        <div className="agent-markdown agent-tool-markdown mt-1 text-foreground">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {rewriteMediaLinesToMarkdown(body)}
+          </ReactMarkdown>
+        </div>
+      ) : null}
+    </details>
+  );
+});
+
 const ThinkingDetailsRow = memo(function ThinkingDetailsRow({
   thinkingText,
+  toolLines = [],
   durationMs,
   showTyping,
 }: {
-  thinkingText: string;
+  thinkingText?: string | null;
+  toolLines?: string[];
   durationMs?: number;
   showTyping?: boolean;
 }) {
-  if (!thinkingText.trim()) return null;
+  const normalizedThinkingText = thinkingText?.trim() ?? "";
+  const hasThinkingText = normalizedThinkingText.length > 0;
+  const hasToolLines = toolLines.length > 0;
+  if (!hasThinkingText && !hasToolLines) return null;
   return (
     <details className="group rounded-[8px] border border-border/70 bg-surface-2 px-2 py-1.5 text-[10px] text-muted-foreground/80">
       <summary className="flex cursor-pointer list-none items-center gap-2 opacity-65 [&::-webkit-details-marker]:hidden">
@@ -208,9 +242,22 @@ const ThinkingDetailsRow = memo(function ThinkingDetailsRow({
           ) : null}
         </span>
       </summary>
-      <div className="agent-markdown mt-2 min-w-0 pl-5 text-foreground/85">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{thinkingText}</ReactMarkdown>
-      </div>
+      {hasThinkingText ? (
+        <div className="agent-markdown mt-2 min-w-0 pl-5 text-foreground/85">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizedThinkingText}</ReactMarkdown>
+        </div>
+      ) : null}
+      {hasToolLines ? (
+        <div className="mt-2 space-y-1.5 pl-5">
+          {toolLines.map((line, index) => (
+            <ToolCallDetails
+              key={`thinking-tool-${index}-${line.slice(0, 48)}`}
+              line={line}
+              className="rounded-[8px] border border-border/70 bg-surface-3 px-2 py-1 text-[10px] text-muted-foreground"
+            />
+          ))}
+        </div>
+      ) : null}
     </details>
   );
 });
@@ -247,6 +294,7 @@ const AssistantMessageCard = memo(function AssistantMessageCard({
   name,
   timestampMs,
   thinkingText,
+  thinkingToolLines,
   thinkingDurationMs,
   showTypingIndicator,
   contentText,
@@ -257,14 +305,17 @@ const AssistantMessageCard = memo(function AssistantMessageCard({
   name: string;
   timestampMs?: number;
   thinkingText?: string | null;
+  thinkingToolLines?: string[];
   thinkingDurationMs?: number;
   showTypingIndicator?: boolean;
   contentText?: string | null;
   streaming?: boolean;
 }) {
   const resolvedTimestamp = typeof timestampMs === "number" ? timestampMs : null;
-  const widthClass = resolveAssistantMaxWidthClass(contentText);
-  const hasThinking = Boolean(thinkingText?.trim());
+  const hasThinking = Boolean(thinkingText?.trim() || (thinkingToolLines?.length ?? 0) > 0);
+  const widthClass = hasThinking
+    ? ASSISTANT_MAX_WIDTH_EXPANDED_CLASS
+    : resolveAssistantMaxWidthClass(contentText);
   const hasContent = Boolean(contentText?.trim());
   const compactStreamingIndicator = Boolean(streaming && !hasThinking && !hasContent);
 
@@ -321,9 +372,10 @@ const AssistantMessageCard = memo(function AssistantMessageCard({
               </div>
             ) : null}
 
-            {thinkingText ? (
+            {hasThinking ? (
               <ThinkingDetailsRow
                 thinkingText={thinkingText}
+                toolLines={thinkingToolLines ?? []}
                 durationMs={thinkingDurationMs}
                 showTyping={streaming}
               />
@@ -393,47 +445,77 @@ const AgentChatFinalItems = memo(function AgentChatFinalItems({
         text: string | null;
         timestampMs?: number;
         thinkingText?: string;
+        thinkingToolLines: string[];
         thinkingDurationMs?: number;
       }
     | { kind: "tool"; text: string }
   > = [];
+  let orphanToolLines: string[] = [];
 
-  for (const item of chatItems) {
-    switch (item.kind) {
-      case "thinking":
-        pendingThinking = item;
-        break;
-      case "user":
-        pendingThinking = null;
-        blocks.push({ kind: "user", text: item.text, timestampMs: item.timestampMs });
-        break;
-      case "assistant":
-        blocks.push({
-          kind: "assistant",
-          text: item.text,
-          timestampMs: item.timestampMs ?? pendingThinking?.timestampMs,
-          thinkingText: pendingThinking?.kind === "thinking" ? pendingThinking.text : undefined,
-          thinkingDurationMs:
-            item.thinkingDurationMs ??
-            (pendingThinking?.kind === "thinking" ? pendingThinking.thinkingDurationMs : undefined),
-        });
-        pendingThinking = null;
-        break;
-      case "tool":
-        blocks.push({ kind: "tool", text: item.text });
-        break;
-    }
-  }
-
-  if (pendingThinking?.kind === "thinking") {
+  const flushPendingThinking = () => {
+    if (!pendingThinking || pendingThinking.kind !== "thinking") return;
     blocks.push({
       kind: "assistant",
       text: null,
       timestampMs: pendingThinking.timestampMs,
       thinkingText: pendingThinking.text,
+      thinkingToolLines: [...orphanToolLines],
       thinkingDurationMs: pendingThinking.thinkingDurationMs,
     });
+    pendingThinking = null;
+    orphanToolLines = [];
+  };
+
+  const flushOrphanToolLines = () => {
+    if (orphanToolLines.length === 0) return;
+    for (const line of orphanToolLines) {
+      blocks.push({ kind: "tool", text: line });
+    }
+    orphanToolLines = [];
+  };
+
+  for (const item of chatItems) {
+    switch (item.kind) {
+      case "thinking":
+        flushPendingThinking();
+        pendingThinking = item;
+        break;
+      case "user":
+        flushPendingThinking();
+        flushOrphanToolLines();
+        blocks.push({ kind: "user", text: item.text, timestampMs: item.timestampMs });
+        break;
+      case "assistant":
+        if (pendingThinking?.kind === "thinking") {
+          blocks.push({
+            kind: "assistant",
+            text: item.text,
+            timestampMs: item.timestampMs ?? pendingThinking.timestampMs,
+            thinkingText: pendingThinking.text,
+            thinkingToolLines: [...orphanToolLines],
+            thinkingDurationMs: item.thinkingDurationMs ?? pendingThinking.thinkingDurationMs,
+          });
+          pendingThinking = null;
+          orphanToolLines = [];
+        } else {
+          flushOrphanToolLines();
+          blocks.push({
+            kind: "assistant",
+            text: item.text,
+            timestampMs: item.timestampMs,
+            thinkingToolLines: [],
+            thinkingDurationMs: item.thinkingDurationMs,
+          });
+        }
+        break;
+      case "tool":
+        orphanToolLines.push(item.text);
+        break;
+    }
   }
+
+  flushPendingThinking();
+  flushOrphanToolLines();
 
   return (
     <>
@@ -448,23 +530,11 @@ const AgentChatFinalItems = memo(function AgentChatFinalItems({
           );
         }
         if (block.kind === "tool") {
-          const { summaryText, body } = summarizeToolLabel(block.text);
           return (
-            <details
+            <ToolCallDetails
               key={`chat-${agentId}-tool-${index}`}
-              className={`w-full ${ASSISTANT_MAX_WIDTH_EXPANDED_CLASS} ${ASSISTANT_GUTTER_CLASS} self-start rounded-[8px] border border-border/70 bg-surface-3 px-2 py-1 text-[10px] text-muted-foreground`}
-            >
-                <summary className="cursor-pointer select-none font-mono text-[10px] font-semibold tracking-[0.11em]">
-                  {summaryText}
-                </summary>
-                {body ? (
-                  <div className="agent-markdown agent-tool-markdown mt-1 text-foreground">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {rewriteMediaLinesToMarkdown(body)}
-                    </ReactMarkdown>
-                  </div>
-                ) : null}
-            </details>
+              line={block.text}
+            />
           );
         }
         const streaming = running && index === blocks.length - 1 && !block.text;
@@ -476,6 +546,7 @@ const AgentChatFinalItems = memo(function AgentChatFinalItems({
             name={name}
             timestampMs={block.timestampMs ?? (streaming ? runStartedAt ?? undefined : undefined)}
             thinkingText={block.thinkingText ?? null}
+            thinkingToolLines={block.thinkingToolLines}
             thinkingDurationMs={block.thinkingDurationMs}
             contentText={block.text}
             streaming={streaming}
