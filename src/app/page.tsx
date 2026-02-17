@@ -16,7 +16,6 @@ import {
   isHeartbeatPrompt,
 } from "@/lib/text/message-extract";
 import {
-  parseAgentIdFromSessionKey,
   useGatewayConnection,
 } from "@/lib/gateway/GatewayClient";
 import { createRafBatcher } from "@/lib/dom";
@@ -66,9 +65,6 @@ import { buildAvatarDataUrl } from "@/lib/avatars/multiavatar";
 import { createStudioSettingsCoordinator } from "@/lib/studio/coordinator";
 import { resolveFocusedPreference } from "@/lib/studio/settings";
 import { applySessionSettingMutation } from "@/features/agents/state/sessionSettingsMutations";
-import {
-  compileGuidedAgentCreation,
-} from "@/features/agents/creation/compiler";
 import type { AgentCreateModalSubmitPayload } from "@/features/agents/creation/types";
 import {
   applyPendingGuidedSetupForAgent,
@@ -87,12 +83,6 @@ import {
   type AgentGuidedSetup,
 } from "@/features/agents/operations/createAgentOperation";
 import {
-  resolveGuidedCreateCompletion,
-  runGuidedCreateWorkflow,
-  runGuidedRetryWorkflow,
-} from "@/features/agents/operations/guidedCreateWorkflow";
-import { applyPendingGuidedSetupRetryViaStudio } from "@/features/agents/operations/pendingGuidedSetupRetryOperation";
-import {
   isGatewayDisconnectLikeError,
   type EventFrame,
 } from "@/lib/gateway/GatewayClient";
@@ -101,11 +91,7 @@ import { deleteAgentViaStudio } from "@/features/agents/operations/deleteAgentOp
 import { performCronCreateFlow } from "@/features/agents/operations/cronCreateOperation";
 import { sendChatMessageViaStudio } from "@/features/agents/operations/chatSendOperation";
 import { hydrateAgentFleetFromGateway } from "@/features/agents/operations/agentFleetHydration";
-import {
-  buildConfigMutationFailureMessage,
-  resolveConfigMutationStatusLine,
-  runConfigMutationWorkflow,
-} from "@/features/agents/operations/configMutationWorkflow";
+import { resolveConfigMutationStatusLine } from "@/features/agents/operations/configMutationWorkflow";
 import { useConfigMutationQueue } from "@/features/agents/operations/useConfigMutationQueue";
 import { isLocalGatewayUrl } from "@/lib/gateway/local-gateway";
 import { shouldAwaitDisconnectRestartForRemoteMutation } from "@/lib/gateway/gatewayReloadMode";
@@ -113,8 +99,8 @@ import { useGatewayRestartBlock } from "@/features/agents/operations/useGatewayR
 import { randomUUID } from "@/lib/uuid";
 import type { ExecApprovalDecision, PendingExecApproval } from "@/features/agents/approvals/types";
 import {
-  resolveExecApprovalEventEffects,
-} from "@/features/agents/approvals/execApprovalLifecycleWorkflow";
+  resolveGatewayEventIngressDecision,
+} from "@/features/agents/state/gatewayEventIngressWorkflow";
 import { resolveExecApprovalViaStudio } from "@/features/agents/approvals/execApprovalResolveOperation";
 import {
   mergePendingApprovalsForFocusedAgent,
@@ -122,6 +108,7 @@ import {
   pruneExpiredPendingApprovals,
   pruneExpiredPendingApprovalsMap,
   removePendingApprovalById,
+  removePendingApprovalEverywhere,
   removePendingApprovalByIdMap,
   upsertPendingApproval,
 } from "@/features/agents/approvals/pendingStore";
@@ -149,11 +136,16 @@ import {
   runHistorySyncOperation,
 } from "@/features/agents/operations/historySyncOperation";
 import {
-  buildMutationSideEffectCommands,
   buildQueuedMutationBlock,
   resolveMutationStartGuard,
 } from "@/features/agents/operations/agentMutationLifecycleController";
 import { runPendingGuidedSetupAutoRetryViaStudio } from "@/features/agents/operations/pendingGuidedSetupAutoRetryOperation";
+import { runAgentConfigMutationLifecycle } from "@/features/agents/operations/agentConfigMutationLifecycleOperation";
+import {
+  isCreateBlockTimedOut,
+  runCreateAgentMutationLifecycle,
+  runPendingCreateSetupRetryLifecycle,
+} from "@/features/agents/operations/createAgentMutationLifecycleOperation";
 
 const DEFAULT_CHAT_HISTORY_LIMIT = 200;
 const MAX_CHAT_HISTORY_LIMIT = 5000;
@@ -696,27 +688,24 @@ const AgentStudioPage = () => {
 
   const applyPendingCreateSetupForAgentId = useCallback(
     async (params: { agentId: string; source: "auto" | "manual" }) => {
-      return await applyPendingGuidedSetupRetryViaStudio({
+      return await runPendingCreateSetupRetryLifecycle({
         agentId: params.agentId,
         source: params.source,
         retryBusyAgentId: retryPendingSetupBusyAgentId,
         inFlightAgentIds: pendingSetupAutoRetryInFlightRef.current,
         pendingSetupsByAgentId: pendingCreateSetupsByAgentIdRef.current,
         setRetryBusyAgentId: setRetryPendingSetupBusyAgentId,
-        executeRetry: async (agentId) =>
-          runGuidedRetryWorkflow(agentId, {
-            applyPendingSetup: async (targetAgentId) =>
-              applyPendingGuidedSetupForAgent({
-                client,
-                agentId: targetAgentId,
-                pendingSetupsByAgentId: pendingCreateSetupsByAgentIdRef.current,
-              }),
-            removePending: (targetAgentId) => {
-              setPendingCreateSetupsByAgentId((current) =>
-                removePendingGuidedSetup(current, targetAgentId)
-              );
-            },
+        applyPendingSetup: async (targetAgentId) =>
+          applyPendingGuidedSetupForAgent({
+            client,
+            agentId: targetAgentId,
+            pendingSetupsByAgentId: pendingCreateSetupsByAgentIdRef.current,
           }),
+        removePending: (targetAgentId) => {
+          setPendingCreateSetupsByAgentId((current) =>
+            removePendingGuidedSetup(current, targetAgentId)
+          );
+        },
         isDisconnectLikeError: isGatewayDisconnectLikeError,
         resolveAgentName: (agentId) =>
           stateRef.current.agents.find((agent) => agent.agentId === agentId)?.name ??
@@ -1260,24 +1249,28 @@ const AgentStudioPage = () => {
         `Delete ${agent.name}? This removes the agent from gateway config + cron and moves its workspace/state into ~/.openclaw/trash on the gateway host.`
       );
       if (!confirmed) return;
-      const queuedDeleteBlock = buildQueuedMutationBlock({
+      await runAgentConfigMutationLifecycle({
         kind: "delete-agent",
-        agentId,
-        agentName: agent.name,
-        startedAt: Date.now(),
-      });
-      setDeleteAgentBlock({
-        agentId: queuedDeleteBlock.agentId,
-        agentName: queuedDeleteBlock.agentName,
-        phase: "queued",
-        startedAt: queuedDeleteBlock.startedAt,
-        sawDisconnect: queuedDeleteBlock.sawDisconnect,
-      });
-      try {
-        await enqueueConfigMutation({
-          kind: "delete-agent",
-          label: `Delete ${agent.name}`,
-          run: async () => {
+        label: `Delete ${agent.name}`,
+        isLocalGateway,
+        deps: {
+          enqueueConfigMutation,
+          setQueuedBlock: () => {
+            const queuedDeleteBlock = buildQueuedMutationBlock({
+              kind: "delete-agent",
+              agentId,
+              agentName: agent.name,
+              startedAt: Date.now(),
+            });
+            setDeleteAgentBlock({
+              agentId: queuedDeleteBlock.agentId,
+              agentName: queuedDeleteBlock.agentName,
+              phase: "queued",
+              startedAt: queuedDeleteBlock.startedAt,
+              sawDisconnect: queuedDeleteBlock.sawDisconnect,
+            });
+          },
+          setMutatingBlock: () => {
             setDeleteAgentBlock((current) => {
               if (!current || current.agentId !== agentId) return current;
               return {
@@ -1285,60 +1278,43 @@ const AgentStudioPage = () => {
                 phase: "deleting",
               };
             });
-            const result = await runConfigMutationWorkflow(
-              { kind: "delete-agent", isLocalGateway },
-              {
-                executeMutation: async () => {
-                  await deleteAgentViaStudio({
-                    client,
-                    agentId,
-                    fetchJson,
-                    logError: (message, error) => console.error(message, error),
-                  });
-                  setSettingsAgentId(null);
-                },
-                shouldAwaitRemoteRestart: async () =>
-                  shouldAwaitDisconnectRestartForRemoteMutation({
-                    client,
-                    cachedConfigSnapshot: gatewayConfigSnapshot,
-                    logError: (message, error) => console.error(message, error),
-                  }),
-              }
-            );
-            const commands = buildMutationSideEffectCommands({
-              disposition: result.disposition,
-            });
-            for (const command of commands) {
-              if (command.kind === "reload-agents") {
-                await loadAgents();
-                continue;
-              }
-              if (command.kind === "clear-mutation-block") {
-                setDeleteAgentBlock(null);
-                continue;
-              }
-              if (command.kind === "set-mobile-pane") {
-                setMobilePane(command.pane);
-                continue;
-              }
-              setDeleteAgentBlock((current) => {
-                if (!current || current.agentId !== agentId) return current;
-                return {
-                  ...current,
-                  ...command.patch,
-                };
-              });
-            }
           },
-        });
-      } catch (err) {
-        const msg = buildConfigMutationFailureMessage({
-          kind: "delete-agent",
-          error: err,
-        });
-        setDeleteAgentBlock(null);
-        setError(msg);
-      }
+          patchBlockAwaitingRestart: (patch) => {
+            setDeleteAgentBlock((current) => {
+              if (!current || current.agentId !== agentId) return current;
+              return {
+                ...current,
+                ...patch,
+              };
+            });
+          },
+          clearBlock: () => {
+            setDeleteAgentBlock(null);
+          },
+          executeMutation: async () => {
+            await deleteAgentViaStudio({
+              client,
+              agentId,
+              fetchJson,
+              logError: (message, error) => console.error(message, error),
+            });
+            setSettingsAgentId(null);
+          },
+          shouldAwaitRemoteRestart: async () =>
+            shouldAwaitDisconnectRestartForRemoteMutation({
+              client,
+              cachedConfigSnapshot: gatewayConfigSnapshot,
+              logError: (message, error) => console.error(message, error),
+            }),
+          reloadAgents: loadAgents,
+          setMobilePaneChat: () => {
+            setMobilePane("chat");
+          },
+          onError: (message) => {
+            setError(message);
+          },
+        },
+      });
     },
     [
       agents,
@@ -1530,107 +1506,75 @@ const AgentStudioPage = () => {
 
   const handleCreateAgentSubmit = useCallback(
     async (payload: AgentCreateModalSubmitPayload) => {
-      if (createAgentBusy) return;
-      const guard = resolveMutationStartGuard({
-        status,
-        hasCreateBlock: Boolean(createAgentBlock),
-        hasRenameBlock: Boolean(renameAgentBlock),
-        hasDeleteBlock: Boolean(deleteAgentBlock),
-      });
-      if (guard.kind === "deny") {
-        if (guard.reason !== "not-connected") return;
-        setCreateAgentModalError("Connect to gateway before creating an agent.");
-        return;
-      }
-
-      const name = payload.name.trim();
-      const selectedAvatarSeed = payload.avatarSeed?.trim() ?? "";
-      if (!name) {
-        setCreateAgentModalError("Agent name is required.");
-        return;
-      }
-
-      const compiled = compileGuidedAgentCreation({ name, draft: payload.draft });
-      if (compiled.validation.errors.length > 0) {
-        setCreateAgentModalError(compiled.validation.errors[0] ?? "Guided setup is incomplete.");
-        return;
-      }
-      const setup: AgentGuidedSetup = {
-        agentOverrides: compiled.agentOverrides,
-        files: compiled.files,
-        execApprovals: compiled.execApprovals,
-      };
-
-      setCreateAgentBusy(true);
-      setCreateAgentModalError(null);
-      const queuedCreateBlock = buildQueuedMutationBlock({
-        kind: "create-agent",
-        agentId: "",
-        agentName: name,
-        startedAt: Date.now(),
-      });
-      setCreateAgentBlock({
-        agentId: null,
-        agentName: queuedCreateBlock.agentName,
-        phase: "queued",
-        startedAt: queuedCreateBlock.startedAt,
-      });
-      try {
-        const queuedMutation = enqueueConfigMutation({
-          kind: "create-agent",
-          label: `Create ${name}`,
-          run: async () => {
+      await runCreateAgentMutationLifecycle(
+        {
+          payload,
+          status,
+          hasCreateBlock: Boolean(createAgentBlock),
+          hasRenameBlock: Boolean(renameAgentBlock),
+          hasDeleteBlock: Boolean(deleteAgentBlock),
+          createAgentBusy,
+          isLocalGateway,
+        },
+        {
+          enqueueConfigMutation,
+          createAgent: async (name, avatarSeed) => {
+            const created = await createGatewayAgent({ client, name });
+            if (avatarSeed) {
+              persistAvatarSeed(created.id, avatarSeed);
+            }
+            flushPendingDraft(focusedAgent?.agentId ?? null);
+            focusFilterTouchedRef.current = true;
+            setFocusFilter("all");
+            dispatch({ type: "selectAgent", agentId: created.id });
+            setSettingsAgentId(null);
+            setMobilePane("chat");
+            return { id: created.id };
+          },
+          applySetup: async (agentId, setup) => {
+            await applyGuidedAgentSetup({
+              client,
+              agentId,
+              setup,
+            });
+          },
+          upsertPending: (agentId, setup) => {
+            setPendingCreateSetupsByAgentId((current) =>
+              upsertPendingGuidedSetup(current, agentId, setup)
+            );
+          },
+          removePending: (agentId) => {
+            setPendingCreateSetupsByAgentId((current) =>
+              removePendingGuidedSetup(current, agentId)
+            );
+          },
+          setQueuedBlock: ({ agentName, startedAt }) => {
+            const queuedCreateBlock = buildQueuedMutationBlock({
+              kind: "create-agent",
+              agentId: "",
+              agentName,
+              startedAt,
+            });
+            setCreateAgentBlock({
+              agentId: null,
+              agentName: queuedCreateBlock.agentName,
+              phase: "queued",
+              startedAt: queuedCreateBlock.startedAt,
+            });
+          },
+          setCreatingBlock: (agentName) => {
             setCreateAgentBlock((current) => {
-              if (!current || current.agentName !== name) return current;
+              if (!current || current.agentName !== agentName) return current;
               return { ...current, phase: "creating" };
             });
-            const result = await runGuidedCreateWorkflow(
-              {
-                name,
-                setup,
-                isLocalGateway,
-              },
-              {
-                createAgent: async (agentName) => {
-                  const created = await createGatewayAgent({ client, name: agentName });
-                  if (selectedAvatarSeed) {
-                    persistAvatarSeed(created.id, selectedAvatarSeed);
-                  }
-                  flushPendingDraft(focusedAgent?.agentId ?? null);
-                  focusFilterTouchedRef.current = true;
-                  setFocusFilter("all");
-                  dispatch({ type: "selectAgent", agentId: created.id });
-                  setSettingsAgentId(null);
-                  setMobilePane("chat");
-                  return { id: created.id };
-                },
-                applySetup: async (agentId, nextSetup) => {
-                  setCreateAgentBlock((current) => {
-                    if (!current || current.agentName !== name) return current;
-                    return { ...current, agentId, phase: "applying-setup" };
-                  });
-                  await applyGuidedAgentSetup({
-                    client,
-                    agentId,
-                    setup: nextSetup,
-                  });
-                },
-                upsertPending: (agentId, nextSetup) => {
-                  setPendingCreateSetupsByAgentId((current) =>
-                    upsertPendingGuidedSetup(current, agentId, nextSetup)
-                  );
-                },
-                removePending: (agentId) => {
-                  setPendingCreateSetupsByAgentId((current) =>
-                    removePendingGuidedSetup(current, agentId)
-                  );
-                },
-              }
-            );
-            const completion = resolveGuidedCreateCompletion({
-              agentName: name,
-              result,
+          },
+          setApplyingSetupBlock: ({ agentName, agentId }) => {
+            setCreateAgentBlock((current) => {
+              if (!current || current.agentName !== agentName) return current;
+              return { ...current, agentId, phase: "applying-setup" };
             });
+          },
+          onCompletion: async (completion) => {
             if (completion.shouldReloadAgents) {
               await loadAgents();
             }
@@ -1643,17 +1587,15 @@ const AgentStudioPage = () => {
               setError(completion.pendingErrorMessage);
             }
           },
-        });
-        setCreateAgentModalOpen(false);
-        await queuedMutation;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to create agent.";
-        setCreateAgentBlock(null);
-        setCreateAgentModalError(message);
-        setError(message);
-      } finally {
-        setCreateAgentBusy(false);
-      }
+          setCreateAgentModalOpen,
+          setCreateAgentModalError,
+          setCreateAgentBusy,
+          clearCreateBlock: () => {
+            setCreateAgentBlock(null);
+          },
+          onError: setError,
+        }
+      );
     },
     [
       client,
@@ -1675,13 +1617,35 @@ const AgentStudioPage = () => {
 
   useEffect(() => {
     if (!createAgentBlock || createAgentBlock.phase === "queued") return;
-    const elapsed = Date.now() - createAgentBlock.startedAt;
-    const remaining = Math.max(0, 90_000 - elapsed);
-    const timeoutId = window.setTimeout(() => {
+    const maxWaitMs = 90_000;
+    const timeoutNow = isCreateBlockTimedOut({
+      block: createAgentBlock,
+      nowMs: Date.now(),
+      maxWaitMs,
+    });
+    const handleTimeout = () => {
       setCreateAgentBlock(null);
       setCreateAgentModalOpen(false);
       void loadAgents();
       setError("Agent creation timed out.");
+    };
+    if (timeoutNow) {
+      handleTimeout();
+      return;
+    }
+    const elapsed = Date.now() - createAgentBlock.startedAt;
+    const remaining = Math.max(0, maxWaitMs - elapsed);
+    const timeoutId = window.setTimeout(() => {
+      if (
+        !isCreateBlockTimedOut({
+          block: createAgentBlock,
+          nowMs: Date.now(),
+          maxWaitMs,
+        })
+      ) {
+        return;
+      }
+      handleTimeout();
     }, remaining);
     return () => {
       window.clearTimeout(timeoutId);
@@ -1921,48 +1885,88 @@ const AgentStudioPage = () => {
     [client, loadAgentHistory, pendingExecApprovalsByAgentId, unscopedPendingExecApprovals]
   );
 
-  const handleExecApprovalEvent = useCallback(
+  const handleGatewayEventIngress = useCallback(
     (event: EventFrame) => {
-      const effects = resolveExecApprovalEventEffects({
+      const ingressDecision = resolveGatewayEventIngressDecision({
         event,
         agents: stateRef.current.agents,
+        seenCronDedupeKeys: seenCronEventIdsRef.current,
+        nowMs: Date.now(),
       });
-      if (!effects) return;
-      for (const removalId of effects.removals) {
-        setPendingExecApprovalsByAgentId((current) => {
-          return removePendingApprovalByIdMap(current, removalId);
-        });
-        setUnscopedPendingExecApprovals((current) => {
-          return removePendingApprovalById(current, removalId);
-        });
+
+      const effects = ingressDecision.approvalEffects;
+      if (effects) {
+        for (const removalId of effects.removals) {
+          setPendingExecApprovalsByAgentId((current) => {
+            return removePendingApprovalEverywhere({
+              approvalsByAgentId: current,
+              unscopedApprovals: [],
+              approvalId: removalId,
+            }).approvalsByAgentId;
+          });
+          setUnscopedPendingExecApprovals((current) => {
+            return removePendingApprovalEverywhere({
+              approvalsByAgentId: {},
+              unscopedApprovals: current,
+              approvalId: removalId,
+            }).unscopedApprovals;
+          });
+        }
+        for (const scopedUpsert of effects.scopedUpserts) {
+          setPendingExecApprovalsByAgentId((current) => {
+            const withoutExisting = removePendingApprovalByIdMap(current, scopedUpsert.approval.id);
+            const existing = withoutExisting[scopedUpsert.agentId] ?? [];
+            const upserted = upsertPendingApproval(existing, scopedUpsert.approval);
+            if (upserted === existing) return withoutExisting;
+            return {
+              ...withoutExisting,
+              [scopedUpsert.agentId]: upserted,
+            };
+          });
+          setUnscopedPendingExecApprovals((current) =>
+            removePendingApprovalById(current, scopedUpsert.approval.id)
+          );
+        }
+        for (const unscopedUpsert of effects.unscopedUpserts) {
+          setPendingExecApprovalsByAgentId((current) =>
+            removePendingApprovalByIdMap(current, unscopedUpsert.id)
+          );
+          setUnscopedPendingExecApprovals((current) => {
+            const withoutExisting = removePendingApprovalById(current, unscopedUpsert.id);
+            return upsertPendingApproval(withoutExisting, unscopedUpsert);
+          });
+        }
+        for (const agentId of effects.markActivityAgentIds) {
+          dispatch({ type: "markActivity", agentId });
+        }
       }
-      for (const scopedUpsert of effects.scopedUpserts) {
-        setPendingExecApprovalsByAgentId((current) => {
-          const withoutExisting = removePendingApprovalByIdMap(current, scopedUpsert.approval.id);
-          const existing = withoutExisting[scopedUpsert.agentId] ?? [];
-          const upserted = upsertPendingApproval(existing, scopedUpsert.approval);
-          if (upserted === existing) return withoutExisting;
-          return {
-            ...withoutExisting,
-            [scopedUpsert.agentId]: upserted,
-          };
-        });
-        setUnscopedPendingExecApprovals((current) =>
-          removePendingApprovalById(current, scopedUpsert.approval.id)
-        );
+
+      if (ingressDecision.cronDedupeKeyToRecord) {
+        seenCronEventIdsRef.current.add(ingressDecision.cronDedupeKeyToRecord);
       }
-      for (const unscopedUpsert of effects.unscopedUpserts) {
-        setPendingExecApprovalsByAgentId((current) =>
-          removePendingApprovalByIdMap(current, unscopedUpsert.id)
-        );
-        setUnscopedPendingExecApprovals((current) => {
-          const withoutExisting = removePendingApprovalById(current, unscopedUpsert.id);
-          return upsertPendingApproval(withoutExisting, unscopedUpsert);
-        });
+      if (!ingressDecision.cronTranscriptIntent) {
+        return;
       }
-      for (const agentId of effects.markActivityAgentIds) {
-        dispatch({ type: "markActivity", agentId });
-      }
+      const intent = ingressDecision.cronTranscriptIntent;
+      dispatch({
+        type: "appendOutput",
+        agentId: intent.agentId,
+        line: intent.line,
+        transcript: {
+          source: "runtime-agent",
+          role: "assistant",
+          kind: "assistant",
+          sessionKey: intent.sessionKey,
+          timestampMs: intent.timestampMs,
+          entryId: intent.dedupeKey,
+          confirmed: true,
+        },
+      });
+      dispatch({
+        type: "markActivity",
+        agentId: intent.agentId,
+        at: intent.activityAtMs ?? undefined,
+      });
     },
     [dispatch]
   );
@@ -1989,49 +1993,7 @@ const AgentStudioPage = () => {
     runtimeEventHandlerRef.current = handler;
     const unsubscribe = client.onEvent((event: EventFrame) => {
       handler.handleEvent(event);
-      handleExecApprovalEvent(event);
-      if (event.event === "cron") {
-        const payload = event.payload;
-        if (!payload || typeof payload !== "object") return;
-        const record = payload as Record<string, unknown>;
-        if (record.action !== "finished") return;
-        const sessionKey = typeof record.sessionKey === "string" ? record.sessionKey.trim() : "";
-        if (!sessionKey) return;
-        const agentId = parseAgentIdFromSessionKey(sessionKey);
-        if (!agentId) return;
-        const jobId = typeof record.jobId === "string" ? record.jobId.trim() : "";
-        if (!jobId) return;
-        const sessionId = typeof record.sessionId === "string" ? record.sessionId.trim() : "";
-        const runAtMs = typeof record.runAtMs === "number" ? record.runAtMs : null;
-        const status = typeof record.status === "string" ? record.status.trim() : "";
-        const error = typeof record.error === "string" ? record.error.trim() : "";
-        const summary = typeof record.summary === "string" ? record.summary.trim() : "";
-
-        const dedupeKey = `cron:${jobId}:${sessionId || (runAtMs ?? "none")}`;
-        if (seenCronEventIdsRef.current.has(dedupeKey)) return;
-        seenCronEventIdsRef.current.add(dedupeKey);
-
-        const agent = stateRef.current.agents.find((entry) => entry.agentId === agentId) ?? null;
-        if (!agent) return;
-
-        const header = `Cron finished (${status || "unknown"}): ${jobId}`;
-        const body = summary || error || "(no output)";
-        dispatch({
-          type: "appendOutput",
-          agentId,
-          line: `${header}\n\n${body}`,
-          transcript: {
-            source: "runtime-agent",
-            role: "assistant",
-            kind: "assistant",
-            sessionKey: agent.sessionKey,
-            timestampMs: runAtMs ?? Date.now(),
-            entryId: dedupeKey,
-            confirmed: true,
-          },
-        });
-        dispatch({ type: "markActivity", agentId, at: runAtMs ?? undefined });
-      }
+      handleGatewayEventIngress(event);
     });
     return () => {
       runtimeEventHandlerRef.current = null;
@@ -2047,7 +2009,7 @@ const AgentStudioPage = () => {
     queueLivePatch,
     refreshHeartbeatLatestUpdate,
     specialLatestUpdate,
-    handleExecApprovalEvent,
+    handleGatewayEventIngress,
     status,
   ]);
 
@@ -2070,87 +2032,72 @@ const AgentStudioPage = () => {
       if (guard.kind === "deny") return false;
       const agent = agents.find((entry) => entry.agentId === agentId);
       if (!agent) return false;
-      try {
-        const queuedRenameBlock = buildQueuedMutationBlock({
-          kind: "rename-agent",
-          agentId,
-          agentName: name,
-          startedAt: Date.now(),
-        });
-        setRenameAgentBlock({
-          agentId: queuedRenameBlock.agentId,
-          agentName: queuedRenameBlock.agentName,
-          phase: "queued",
-          startedAt: queuedRenameBlock.startedAt,
-          sawDisconnect: queuedRenameBlock.sawDisconnect,
-        });
-        await enqueueConfigMutation({
-          kind: "rename-agent",
-          label: `Rename ${agent.name}`,
-          run: async () => {
+      return await runAgentConfigMutationLifecycle({
+        kind: "rename-agent",
+        label: `Rename ${agent.name}`,
+        isLocalGateway,
+        deps: {
+          enqueueConfigMutation,
+          setQueuedBlock: () => {
+            const queuedRenameBlock = buildQueuedMutationBlock({
+              kind: "rename-agent",
+              agentId,
+              agentName: name,
+              startedAt: Date.now(),
+            });
+            setRenameAgentBlock({
+              agentId: queuedRenameBlock.agentId,
+              agentName: queuedRenameBlock.agentName,
+              phase: "queued",
+              startedAt: queuedRenameBlock.startedAt,
+              sawDisconnect: queuedRenameBlock.sawDisconnect,
+            });
+          },
+          setMutatingBlock: () => {
             setRenameAgentBlock((current) => {
               if (!current || current.agentId !== agentId) return current;
               return { ...current, phase: "renaming" };
             });
-            const result = await runConfigMutationWorkflow(
-              { kind: "rename-agent", isLocalGateway },
-              {
-                executeMutation: async () => {
-                  await renameGatewayAgent({
-                    client,
-                    agentId,
-                    name,
-                  });
-                  dispatch({
-                    type: "updateAgent",
-                    agentId,
-                    patch: { name },
-                  });
-                },
-                shouldAwaitRemoteRestart: async () =>
-                  shouldAwaitDisconnectRestartForRemoteMutation({
-                    client,
-                    cachedConfigSnapshot: gatewayConfigSnapshot,
-                    logError: (message, error) => console.error(message, error),
-                  }),
-              }
-            );
-            const commands = buildMutationSideEffectCommands({
-              disposition: result.disposition,
-            });
-            for (const command of commands) {
-              if (command.kind === "reload-agents") {
-                await loadAgents();
-                continue;
-              }
-              if (command.kind === "clear-mutation-block") {
-                setRenameAgentBlock(null);
-                continue;
-              }
-              if (command.kind === "set-mobile-pane") {
-                setMobilePane(command.pane);
-                continue;
-              }
-              setRenameAgentBlock((current) => {
-                if (!current || current.agentId !== agentId) return current;
-                return {
-                  ...current,
-                  ...command.patch,
-                };
-              });
-            }
           },
-        });
-        return true;
-      } catch (err) {
-        const message = buildConfigMutationFailureMessage({
-          kind: "rename-agent",
-          error: err,
-        });
-        setRenameAgentBlock(null);
-        setError(message);
-        return false;
-      }
+          patchBlockAwaitingRestart: (patch) => {
+            setRenameAgentBlock((current) => {
+              if (!current || current.agentId !== agentId) return current;
+              return {
+                ...current,
+                ...patch,
+              };
+            });
+          },
+          clearBlock: () => {
+            setRenameAgentBlock(null);
+          },
+          executeMutation: async () => {
+            await renameGatewayAgent({
+              client,
+              agentId,
+              name,
+            });
+            dispatch({
+              type: "updateAgent",
+              agentId,
+              patch: { name },
+            });
+          },
+          shouldAwaitRemoteRestart: async () =>
+            shouldAwaitDisconnectRestartForRemoteMutation({
+              client,
+              cachedConfigSnapshot: gatewayConfigSnapshot,
+              logError: (message, error) => console.error(message, error),
+            }),
+          reloadAgents: loadAgents,
+          setMobilePaneChat: () => {
+            setMobilePane("chat");
+          },
+          onError: (message) => {
+            setError(message);
+          },
+        },
+      });
     },
     [
       agents,
