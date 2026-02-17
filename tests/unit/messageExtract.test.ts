@@ -32,6 +32,11 @@ describe("message-extract", () => {
     expect(extractText(message)).toBe("Ok.");
   });
 
+  it("strips assistant control prefixes in single- and double-bracket forms", () => {
+    expect(extractText({ role: "assistant", content: "[reply_to_current] hello" })).toBe("hello");
+    expect(extractText({ role: "assistant", content: "[[reply_to_current]] hello" })).toBe("hello");
+  });
+
   it("extractTextCached matches extractText and is consistent", () => {
     const message = { role: "user", content: "plain text" };
 

@@ -7,7 +7,6 @@ export type RuntimePolicyIntent =
   | { kind: "ignore"; reason: string }
   | { kind: "clearRunTracking"; runId: string }
   | { kind: "markRunClosed"; runId: string }
-  | { kind: "markTerminalRunSeen"; runId: string }
   | { kind: "markThinkingStarted"; runId: string; at: number }
   | { kind: "clearPendingLivePatch"; agentId: string }
   | { kind: "queueLivePatch"; agentId: string; patch: Partial<AgentState> }
@@ -29,7 +28,7 @@ export type RuntimeChatPolicyInput = {
   nextText: string | null;
   hasThinkingStarted: boolean;
   isClosedRun: boolean;
-  isTerminalRunSeen: boolean;
+  isStaleTerminal: boolean;
   shouldRequestHistoryRefresh: boolean;
   shouldUpdateLastResult: boolean;
   shouldSetRunIdle: boolean;
@@ -115,15 +114,14 @@ export const decideRuntimeChatEvent = (
   if (runId && activeRunId && activeRunId !== runId) {
     return [{ kind: "clearRunTracking", runId }];
   }
-  if (runId && input.isTerminalRunSeen) {
-    return [{ kind: "ignore", reason: "terminal-run-seen" }];
+  if (runId && input.isStaleTerminal) {
+    return [{ kind: "ignore", reason: "stale-terminal-event" }];
   }
 
   const intents: RuntimePolicyIntent[] = [
     { kind: "clearPendingLivePatch", agentId: input.agentId },
   ];
   if (runId) {
-    intents.push({ kind: "markTerminalRunSeen", runId });
     intents.push({ kind: "clearRunTracking", runId });
     intents.push({ kind: "markRunClosed", runId });
   }

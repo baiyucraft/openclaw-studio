@@ -382,130 +382,278 @@ describe("gateway runtime event handler (agent)", () => {
   });
 
   it("applies lifecycle transitions and appends final stream text when no chat events", () => {
-    const agents = [createAgent({ streamText: "final text", runId: "run-4" })];
-    const actions: Array<{ type: string; agentId: string; line?: string; patch?: unknown }> = [];
-    const clearPendingLivePatch = vi.fn();
-    const handler = createGatewayRuntimeEventHandler({
-      getStatus: () => "connected",
-      getAgents: () => agents,
-      dispatch: vi.fn((action) => {
-        actions.push(action as never);
-      }),
-      queueLivePatch: vi.fn(),
-      clearPendingLivePatch,
-      now: () => 1000,
-      loadSummarySnapshot: vi.fn(async () => {}),
-      requestHistoryRefresh: vi.fn(async () => {}),
-      refreshHeartbeatLatestUpdate: vi.fn(),
-      bumpHeartbeatTick: vi.fn(),
-      setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
-      clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
-      isDisconnectLikeError: () => false,
-      logWarn: vi.fn(),
-      updateSpecialLatestUpdate: vi.fn(),
-    });
+    vi.useFakeTimers();
+    try {
+      const agents = [createAgent({ streamText: "final text", runId: "run-4" })];
+      const actions: Array<{ type: string; agentId: string; line?: string; patch?: unknown }> = [];
+      const clearPendingLivePatch = vi.fn();
+      const handler = createGatewayRuntimeEventHandler({
+        getStatus: () => "connected",
+        getAgents: () => agents,
+        dispatch: vi.fn((action) => {
+          actions.push(action as never);
+        }),
+        queueLivePatch: vi.fn(),
+        clearPendingLivePatch,
+        now: () => 1000,
+        loadSummarySnapshot: vi.fn(async () => {}),
+        requestHistoryRefresh: vi.fn(async () => {}),
+        refreshHeartbeatLatestUpdate: vi.fn(),
+        bumpHeartbeatTick: vi.fn(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
+        isDisconnectLikeError: () => false,
+        logWarn: vi.fn(),
+        updateSpecialLatestUpdate: vi.fn(),
+      });
 
-    handler.handleEvent({
-      type: "event",
-      event: "agent",
-      payload: {
-        runId: "run-4",
-        sessionKey: agents[0]!.sessionKey,
-        stream: "lifecycle",
-        data: { phase: "start" },
-      },
-    } as EventFrame);
+      handler.handleEvent({
+        type: "event",
+        event: "agent",
+        payload: {
+          runId: "run-4",
+          sessionKey: agents[0]!.sessionKey,
+          stream: "lifecycle",
+          data: { phase: "start" },
+        },
+      } as EventFrame);
 
-    expect(
-      actions.some((a) => {
-        if (a.type !== "updateAgent") return false;
-        const patch = a.patch as Record<string, unknown>;
-        return patch.status === "running" && patch.runId === "run-4";
-      })
-    ).toBe(true);
+      expect(
+        actions.some((a) => {
+          if (a.type !== "updateAgent") return false;
+          const patch = a.patch as Record<string, unknown>;
+          return patch.status === "running" && patch.runId === "run-4";
+        })
+      ).toBe(true);
 
-    actions.length = 0;
+      actions.length = 0;
 
-    handler.handleEvent({
-      type: "event",
-      event: "agent",
-      payload: {
-        runId: "run-4",
-        sessionKey: agents[0]!.sessionKey,
-        stream: "lifecycle",
-        data: { phase: "end" },
-      },
-    } as EventFrame);
+      handler.handleEvent({
+        type: "event",
+        event: "agent",
+        payload: {
+          runId: "run-4",
+          sessionKey: agents[0]!.sessionKey,
+          stream: "lifecycle",
+          data: { phase: "end" },
+        },
+      } as EventFrame);
 
-    expect(actions.some((a) => a.type === "appendOutput" && a.line === "final text")).toBe(true);
-    expect(
-      actions.some((a) => {
-        if (a.type !== "updateAgent") return false;
-        const patch = a.patch as Record<string, unknown>;
-        return patch.lastResult === "final text" && patch.lastAssistantMessageAt === 1000;
-      })
-    ).toBe(true);
-    expect(
-      actions.some((a) => {
-        if (a.type !== "updateAgent") return false;
-        const patch = a.patch as Record<string, unknown>;
-        return patch.status === "idle" && patch.runId === null;
-      })
-    ).toBe(true);
-    expect(clearPendingLivePatch).toHaveBeenCalledWith("agent-1");
+      vi.runAllTimers();
+
+      expect(actions.some((a) => a.type === "appendOutput" && a.line === "final text")).toBe(true);
+      expect(
+        actions.some((a) => {
+          if (a.type !== "updateAgent") return false;
+          const patch = a.patch as Record<string, unknown>;
+          return patch.lastResult === "final text" && patch.lastAssistantMessageAt === 1000;
+        })
+      ).toBe(true);
+      expect(
+        actions.some((a) => {
+          if (a.type !== "updateAgent") return false;
+          const patch = a.patch as Record<string, unknown>;
+          return patch.status === "idle" && patch.runId === null;
+        })
+      ).toBe(true);
+      expect(clearPendingLivePatch).toHaveBeenCalledWith("agent-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not schedule lifecycle fallback final text for error transitions", () => {
+    vi.useFakeTimers();
+    try {
+      const agents = [createAgent({ streamText: "partial text", runId: "run-err" })];
+      const actions: Array<{ type: string; line?: string; patch?: unknown }> = [];
+      const handler = createGatewayRuntimeEventHandler({
+        getStatus: () => "connected",
+        getAgents: () => agents,
+        dispatch: vi.fn((action) => {
+          actions.push(action as never);
+        }),
+        queueLivePatch: vi.fn(),
+        clearPendingLivePatch: vi.fn(),
+        now: () => 1000,
+        loadSummarySnapshot: vi.fn(async () => {}),
+        requestHistoryRefresh: vi.fn(async () => {}),
+        refreshHeartbeatLatestUpdate: vi.fn(),
+        bumpHeartbeatTick: vi.fn(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
+        isDisconnectLikeError: () => false,
+        logWarn: vi.fn(),
+        updateSpecialLatestUpdate: vi.fn(),
+      });
+
+      handler.handleEvent({
+        type: "event",
+        event: "agent",
+        payload: {
+          runId: "run-err",
+          sessionKey: agents[0]!.sessionKey,
+          stream: "lifecycle",
+          data: { phase: "error" },
+        },
+      } as EventFrame);
+
+      vi.runAllTimers();
+
+      expect(actions.some((entry) => entry.type === "appendOutput")).toBe(false);
+      expect(
+        actions.some((entry) => {
+          if (entry.type !== "updateAgent") return false;
+          const patch = entry.patch as Record<string, unknown>;
+          return patch.status === "error" && patch.runId === null;
+        })
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prefers canonical chat final over lifecycle fallback when final arrives immediately", () => {
+    vi.useFakeTimers();
+    try {
+      const agents = [
+        createAgent({
+          status: "running",
+          runId: "run-7",
+          runStartedAt: 900,
+          streamText: "fallback final",
+        }),
+      ];
+      const actions: Array<{
+        type: string;
+        line?: string;
+        transcript?: { kind?: string; role?: string };
+      }> = [];
+      const handler = createGatewayRuntimeEventHandler({
+        getStatus: () => "connected",
+        getAgents: () => agents,
+        dispatch: vi.fn((action) => {
+          actions.push(action as never);
+        }),
+        queueLivePatch: vi.fn(),
+        clearPendingLivePatch: vi.fn(),
+        now: () => 1000,
+        loadSummarySnapshot: vi.fn(async () => {}),
+        requestHistoryRefresh: vi.fn(async () => {}),
+        refreshHeartbeatLatestUpdate: vi.fn(),
+        bumpHeartbeatTick: vi.fn(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
+        isDisconnectLikeError: () => false,
+        logWarn: vi.fn(),
+        updateSpecialLatestUpdate: vi.fn(),
+      });
+
+      handler.handleEvent({
+        type: "event",
+        event: "agent",
+        payload: {
+          runId: "run-7",
+          sessionKey: agents[0]!.sessionKey,
+          stream: "lifecycle",
+          data: { phase: "end" },
+        },
+      } as EventFrame);
+
+      expect(
+        actions.filter(
+          (entry) => entry.type === "appendOutput" && entry.transcript?.kind === "assistant"
+        )
+      ).toHaveLength(0);
+
+      handler.handleEvent({
+        type: "event",
+        event: "chat",
+        payload: {
+          runId: "run-7",
+          sessionKey: agents[0]!.sessionKey,
+          state: "final",
+          message: { role: "assistant", content: "canonical final" },
+        },
+      } as EventFrame);
+
+      vi.runAllTimers();
+
+      const assistantLines = actions
+        .filter((entry) => entry.type === "appendOutput" && entry.transcript?.kind === "assistant")
+        .map((entry) => entry.line);
+      const assistantMetaLines = actions.filter(
+        (entry) =>
+          entry.type === "appendOutput" &&
+          entry.transcript?.kind === "meta" &&
+          entry.transcript?.role === "assistant"
+      );
+
+      expect(assistantLines).toEqual(["canonical final"]);
+      expect(assistantMetaLines).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("normalizes markdown-rich lifecycle fallback assistant text before append and lastResult update", () => {
-    const normalizedAssistantText = ["- item one", "- item two", "", "```ts", "const n = 1;", "```"].join(
-      "\n"
-    );
-    const agents = [
-      createAgent({
-        streamText: "\n- item one  \n- item two\t \n\n\n```ts  \nconst n = 1;\t\n```\n\n",
-        runId: "run-6",
-      }),
-    ];
-    const actions: Array<{ type: string; line?: string; patch?: unknown }> = [];
-    const handler = createGatewayRuntimeEventHandler({
-      getStatus: () => "connected",
-      getAgents: () => agents,
-      dispatch: vi.fn((action) => {
-        actions.push(action as never);
-      }),
-      queueLivePatch: vi.fn(),
-      clearPendingLivePatch: vi.fn(),
-      now: () => 1000,
-      loadSummarySnapshot: vi.fn(async () => {}),
-      requestHistoryRefresh: vi.fn(async () => {}),
-      refreshHeartbeatLatestUpdate: vi.fn(),
-      bumpHeartbeatTick: vi.fn(),
-      setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
-      clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
-      isDisconnectLikeError: () => false,
-      logWarn: vi.fn(),
-      updateSpecialLatestUpdate: vi.fn(),
-    });
+    vi.useFakeTimers();
+    try {
+      const normalizedAssistantText = ["- item one", "- item two", "", "```ts", "const n = 1;", "```"].join(
+        "\n"
+      );
+      const agents = [
+        createAgent({
+          streamText: "\n- item one  \n- item two\t \n\n\n```ts  \nconst n = 1;\t\n```\n\n",
+          runId: "run-6",
+        }),
+      ];
+      const actions: Array<{ type: string; line?: string; patch?: unknown }> = [];
+      const handler = createGatewayRuntimeEventHandler({
+        getStatus: () => "connected",
+        getAgents: () => agents,
+        dispatch: vi.fn((action) => {
+          actions.push(action as never);
+        }),
+        queueLivePatch: vi.fn(),
+        clearPendingLivePatch: vi.fn(),
+        now: () => 1000,
+        loadSummarySnapshot: vi.fn(async () => {}),
+        requestHistoryRefresh: vi.fn(async () => {}),
+        refreshHeartbeatLatestUpdate: vi.fn(),
+        bumpHeartbeatTick: vi.fn(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
+        isDisconnectLikeError: () => false,
+        logWarn: vi.fn(),
+        updateSpecialLatestUpdate: vi.fn(),
+      });
 
-    handler.handleEvent({
-      type: "event",
-      event: "agent",
-      payload: {
-        runId: "run-6",
-        sessionKey: agents[0]!.sessionKey,
-        stream: "lifecycle",
-        data: { phase: "end" },
-      },
-    } as EventFrame);
+      handler.handleEvent({
+        type: "event",
+        event: "agent",
+        payload: {
+          runId: "run-6",
+          sessionKey: agents[0]!.sessionKey,
+          stream: "lifecycle",
+          data: { phase: "end" },
+        },
+      } as EventFrame);
 
-    expect(
-      actions.some((entry) => entry.type === "appendOutput" && entry.line === normalizedAssistantText)
-    ).toBe(true);
-    expect(
-      actions.some((entry) => {
-        if (entry.type !== "updateAgent") return false;
-        const patch = entry.patch as Record<string, unknown>;
-        return patch.lastResult === normalizedAssistantText;
-      })
-    ).toBe(true);
+      vi.runAllTimers();
+
+      expect(
+        actions.some((entry) => entry.type === "appendOutput" && entry.line === normalizedAssistantText)
+      ).toBe(true);
+      expect(
+        actions.some((entry) => {
+          if (entry.type !== "updateAgent") return false;
+          const patch = entry.patch as Record<string, unknown>;
+          return patch.lastResult === normalizedAssistantText;
+        })
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

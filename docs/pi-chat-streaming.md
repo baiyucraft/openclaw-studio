@@ -218,7 +218,7 @@ Stream handling (high-level):
 - `assistant`: merges `data.delta` into a live `streamText` for the UI.
 - reasoning stream (anything that is not `assistant`, `tool`, `lifecycle` and matches hints like `reason`/`think`/`analysis`/`trace`): merged into `thinkingTrace`.
 - `tool`: formats tool call and tool result lines using `[[tool]]` and `[[tool-result]]`.
-- `lifecycle`: start/end/error transitions; if a run ends without chat events, Studio may “flush” the last streamed assistant text as a final transcript entry.
+- `lifecycle`: start/end/error transitions; if a run reaches `end` without chat final events, Studio may flush the last streamed assistant text as a fallback final transcript entry.
 
 Code:
 - Runtime agent stream merge + append: `src/features/agents/state/gatewayRuntimeEventHandler.ts`

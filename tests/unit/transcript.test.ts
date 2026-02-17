@@ -223,4 +223,101 @@ describe("transcript", () => {
     const confirmed = merged.entries.filter((entry) => entry.confirmed);
     expect(confirmed).toHaveLength(1);
   });
+
+  it("matches history entries even when local and gateway clocks are far apart", () => {
+    const existing = [
+      createEntry({
+        line: "> hello",
+        source: "local-send",
+        sequence: 1,
+        timestampMs: 1_000,
+        role: "user",
+        kind: "user",
+        confirmed: false,
+        entryId: "local:hello",
+      }),
+    ];
+
+    const history = [
+      createEntry({
+        line: "> hello",
+        source: "history",
+        sequence: 10,
+        timestampMs: 600_000,
+        role: "user",
+        kind: "user",
+        confirmed: true,
+        entryId: "history:hello",
+      }),
+    ];
+
+    const merged = mergeTranscriptEntriesWithHistory({
+      existingEntries: existing,
+      historyEntries: history,
+    });
+
+    expect(merged.entries).toHaveLength(1);
+    expect(merged.entries[0]?.confirmed).toBe(true);
+    expect(merged.entries[0]?.timestampMs).toBe(600_000);
+  });
+
+  it("prefers canonical history timestamps to preserve final message order", () => {
+    const existing = [
+      createEntry({
+        line: "> hello",
+        source: "local-send",
+        sequence: 1,
+        timestampMs: 10_000,
+        role: "user",
+        kind: "user",
+        confirmed: false,
+        entryId: "local:user",
+      }),
+      createEntry({
+        line: "assistant reply",
+        source: "runtime-chat",
+        sequence: 2,
+        timestampMs: 5_000,
+        role: "assistant",
+        kind: "assistant",
+        confirmed: false,
+        entryId: "local:assistant",
+      }),
+    ];
+
+    const history = [
+      createEntry({
+        line: "> hello",
+        source: "history",
+        sequence: 10,
+        timestampMs: 1_000,
+        role: "user",
+        kind: "user",
+        confirmed: true,
+        entryId: "history:user",
+      }),
+      createEntry({
+        line: "assistant reply",
+        source: "history",
+        sequence: 11,
+        timestampMs: 2_000,
+        role: "assistant",
+        kind: "assistant",
+        confirmed: true,
+        entryId: "history:assistant",
+      }),
+    ];
+
+    const merged = mergeTranscriptEntriesWithHistory({
+      existingEntries: existing,
+      historyEntries: history,
+    });
+
+    expect(buildOutputLinesFromTranscriptEntries(merged.entries)).toEqual([
+      "> hello",
+      "assistant reply",
+    ]);
+    expect(merged.entries[0]?.timestampMs).toBe(1_000);
+    expect(merged.entries[1]?.timestampMs).toBe(2_000);
+  });
 });

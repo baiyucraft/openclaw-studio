@@ -73,6 +73,16 @@ export type GatewayRuntimeEventHandler = {
   dispose: () => void;
 };
 
+type RunTerminalCommitSource = "chat-final" | "lifecycle-fallback";
+
+type RunTerminalState = {
+  chatFinalSeen: boolean;
+  terminalCommitted: boolean;
+  fallbackTimerId: number | null;
+  lastTerminalSeq: number | null;
+  commitSource: RunTerminalCommitSource | null;
+};
+
 const findAgentBySessionKey = (agents: AgentState[], sessionKey: string): string | null => {
   const exact = agents.find((agent) => isSameSessionKey(agent.sessionKey, sessionKey));
   return exact ? exact.agentId : null;
@@ -157,6 +167,7 @@ export function createGatewayRuntimeEventHandler(
 ): GatewayRuntimeEventHandler {
   const now = deps.now ?? (() => Date.now());
   const CLOSED_RUN_TTL_MS = 30_000;
+  const LIFECYCLE_FALLBACK_DELAY_MS = 300;
   const chatRunSeen = new Set<string>();
   const assistantStreamByRun = new Map<string, string>();
   const thinkingStreamByRun = new Map<string, string>();
@@ -164,7 +175,7 @@ export function createGatewayRuntimeEventHandler(
   const toolLinesSeenByRun = new Map<string, Set<string>>();
   const historyRefreshRequestedByRun = new Set<string>();
   const closedRunExpiresByRun = new Map<string, number>();
-  const terminalChatRunSeen = new Set<string>();
+  const terminalStateByRun = new Map<string, RunTerminalState>();
   const thinkingDebugBySession = new Set<string>();
   const lastActivityMarkByAgent = new Map<string, number>();
 
@@ -178,11 +189,147 @@ export function createGatewayRuntimeEventHandler(
     deps.dispatch({ type: "appendOutput", agentId, line, transcript });
   };
 
+  const resolveTerminalSeq = (payload: ChatEventPayload): number | null => {
+    const seq = payload.seq;
+    if (typeof seq !== "number" || !Number.isFinite(seq)) return null;
+    return seq;
+  };
+
+  const getRunTerminalState = (
+    runId?: string | null,
+    create = false
+  ): RunTerminalState | null => {
+    const key = runId?.trim() ?? "";
+    if (!key) return null;
+    const existing = terminalStateByRun.get(key);
+    if (existing) return existing;
+    if (!create) return null;
+    const next: RunTerminalState = {
+      chatFinalSeen: false,
+      terminalCommitted: false,
+      fallbackTimerId: null,
+      lastTerminalSeq: null,
+      commitSource: null,
+    };
+    terminalStateByRun.set(key, next);
+    return next;
+  };
+
+  const cancelLifecycleFallback = (runId?: string | null) => {
+    const state = getRunTerminalState(runId, false);
+    if (!state) return;
+    if (state.fallbackTimerId === null) return;
+    deps.clearTimeout(state.fallbackTimerId);
+    state.fallbackTimerId = null;
+  };
+
+  const clearRunTerminalState = (runId?: string | null) => {
+    const key = runId?.trim() ?? "";
+    if (!key) return;
+    cancelLifecycleFallback(key);
+    terminalStateByRun.delete(key);
+  };
+
+  const markRunTerminalCommit = (
+    runId: string,
+    source: RunTerminalCommitSource,
+    seq: number | null
+  ) => {
+    const state = getRunTerminalState(runId, true);
+    if (!state) return;
+    state.terminalCommitted = true;
+    state.commitSource = source;
+    if (source === "chat-final") {
+      state.chatFinalSeen = true;
+    }
+    if (typeof seq === "number") {
+      state.lastTerminalSeq = seq;
+    }
+  };
+
+  const isStaleTerminalChatEvent = (runId: string, seq: number | null) => {
+    const state = getRunTerminalState(runId, false);
+    if (!state || !state.terminalCommitted) return false;
+    if (typeof seq !== "number") {
+      return state.commitSource === "chat-final";
+    }
+    if (typeof state.lastTerminalSeq !== "number") {
+      return false;
+    }
+    return seq <= state.lastTerminalSeq;
+  };
+
+  const terminalAssistantMetaEntryId = (runId?: string | null) => {
+    const key = runId?.trim() ?? "";
+    return key ? `run:${key}:assistant:meta` : undefined;
+  };
+
+  const terminalAssistantFinalEntryId = (runId?: string | null) => {
+    const key = runId?.trim() ?? "";
+    return key ? `run:${key}:assistant:final` : undefined;
+  };
+
+  const appendTerminalAssistantCompletion = (params: {
+    agentId: string;
+    runId: string | null;
+    sessionKey: string;
+    source: "runtime-chat" | "runtime-agent";
+    assistantCompletionAt: number;
+    thinkingDurationMs: number | null;
+    finalText: string | null;
+    confirmed: boolean;
+  }) => {
+    const {
+      agentId,
+      runId,
+      sessionKey,
+      source,
+      assistantCompletionAt,
+      thinkingDurationMs,
+      finalText,
+      confirmed,
+    } = params;
+    dispatchOutput(
+      agentId,
+      formatMetaMarkdown({
+        role: "assistant",
+        timestamp: assistantCompletionAt,
+        thinkingDurationMs,
+      }),
+      {
+        source,
+        runId,
+        sessionKey,
+        timestampMs: assistantCompletionAt,
+        role: "assistant",
+        kind: "meta",
+        entryId: terminalAssistantMetaEntryId(runId),
+        confirmed,
+      }
+    );
+    if (!finalText) return;
+    dispatchOutput(agentId, finalText, {
+      source,
+      runId,
+      sessionKey,
+      timestampMs: assistantCompletionAt,
+      role: "assistant",
+      kind: "assistant",
+      entryId: terminalAssistantFinalEntryId(runId),
+      confirmed,
+    });
+  };
+
   const pruneClosedRuns = (at: number = now()) => {
+    const expiredRunIds: string[] = [];
     for (const [runId, expiresAt] of closedRunExpiresByRun.entries()) {
       if (expiresAt <= at) {
         closedRunExpiresByRun.delete(runId);
+        expiredRunIds.push(runId);
       }
+    }
+    for (const runId of expiredRunIds) {
+      clearRunTerminalState(runId);
     }
   };
 
@@ -250,16 +397,7 @@ export function createGatewayRuntimeEventHandler(
     thinkingStartedAtByRun.delete(runId);
     toolLinesSeenByRun.delete(runId);
     historyRefreshRequestedByRun.delete(runId);
-  };
-
-  const markTerminalRunSeen = (runId: string) => {
-    terminalChatRunSeen.add(runId);
-    if (terminalChatRunSeen.size <= 512) return;
-    while (terminalChatRunSeen.size > 384) {
-      const first = terminalChatRunSeen.values().next();
-      if (first.done) break;
-      terminalChatRunSeen.delete(first.value);
-    }
+    cancelLifecycleFallback(runId);
   };
 
   const markActivityThrottled = (agentId: string, at: number = now()) => {
@@ -294,10 +432,6 @@ export function createGatewayRuntimeEventHandler(
       }
       if (intent.kind === "markRunClosed") {
         markRunClosed(intent.runId);
-        continue;
-      }
-      if (intent.kind === "markTerminalRunSeen") {
-        markTerminalRunSeen(intent.runId);
         continue;
       }
       if (intent.kind === "markThinkingStarted") {
@@ -374,7 +508,12 @@ export function createGatewayRuntimeEventHandler(
     toolLinesSeenByRun.clear();
     historyRefreshRequestedByRun.clear();
     closedRunExpiresByRun.clear();
-    terminalChatRunSeen.clear();
+    for (const state of terminalStateByRun.values()) {
+      if (state.fallbackTimerId !== null) {
+        deps.clearTimeout(state.fallbackTimerId);
+      }
+    }
+    terminalStateByRun.clear();
     thinkingDebugBySession.clear();
     lastActivityMarkByAgent.clear();
   };
@@ -472,7 +611,7 @@ export function createGatewayRuntimeEventHandler(
         nextText,
         hasThinkingStarted: payload.runId ? thinkingStartedAtByRun.has(payload.runId) : false,
         isClosedRun: payload.runId ? isClosedRun(payload.runId) : false,
-        isTerminalRunSeen: payload.runId ? terminalChatRunSeen.has(payload.runId) : false,
+        isStaleTerminal: false,
         shouldRequestHistoryRefresh: false,
         shouldUpdateLastResult: false,
         shouldSetRunIdle: false,
@@ -514,6 +653,37 @@ export function createGatewayRuntimeEventHandler(
       payload.state === "final" && !isToolRole && typeof finalAssistantText === "string";
     const shouldQueueLatestUpdate =
       payload.state === "final" && Boolean(agent?.lastUserMessage && !agent.latestOverride);
+    const terminalSeq = payload.state === "final" ? resolveTerminalSeq(payload) : null;
+    const terminalStateBeforeFinal =
+      payload.state === "final" && payload.runId
+        ? getRunTerminalState(payload.runId, true)
+        : null;
+    const fallbackCommittedBeforeFinal = Boolean(
+      terminalStateBeforeFinal &&
+        terminalStateBeforeFinal.terminalCommitted &&
+        terminalStateBeforeFinal.commitSource === "lifecycle-fallback"
+    );
+    if (terminalStateBeforeFinal) {
+      terminalStateBeforeFinal.chatFinalSeen = true;
+    }
+    if (payload.state === "final" && payload.runId) {
+      cancelLifecycleFallback(payload.runId);
+    }
+    const isStaleTerminalForPolicy = (() => {
+      if (!payload.runId) return false;
+      if (payload.state === "final") {
+        return isStaleTerminalChatEvent(payload.runId, terminalSeq);
+      }
+      return false;
+    })();
+    if (payload.state === "final" && payload.runId && isStaleTerminalForPolicy) {
+      logTranscriptDebugMetric("stale_terminal_chat_event_ignored", {
+        runId: payload.runId,
+        seq: terminalSeq,
+        lastTerminalSeq: terminalStateBeforeFinal?.lastTerminalSeq ?? null,
+        commitSource: terminalStateBeforeFinal?.commitSource ?? null,
+      });
+    }
     const chatIntents = decideRuntimeChatEvent({
       agentId,
       state: payload.state,
@@ -527,7 +697,7 @@ export function createGatewayRuntimeEventHandler(
       nextText,
       hasThinkingStarted: payload.runId ? thinkingStartedAtByRun.has(payload.runId) : false,
       isClosedRun: payload.runId ? isClosedRun(payload.runId) : false,
-      isTerminalRunSeen: payload.runId ? terminalChatRunSeen.has(payload.runId) : false,
+      isStaleTerminal: isStaleTerminalForPolicy,
       shouldRequestHistoryRefresh,
       shouldUpdateLastResult,
       shouldSetRunIdle: Boolean(payload.runId && agent?.runId === payload.runId && payload.state !== "error"),
@@ -549,6 +719,13 @@ export function createGatewayRuntimeEventHandler(
     }
 
     if (payload.state === "final") {
+      if (payload.runId && fallbackCommittedBeforeFinal && role === "assistant" && !isToolRole) {
+        logTranscriptDebugMetric("lifecycle_fallback_replaced_by_chat_final", {
+          runId: payload.runId,
+          seq: terminalSeq,
+          lastTerminalSeq: terminalStateBeforeFinal?.lastTerminalSeq ?? null,
+        });
+      }
       if (!nextThinking && role === "assistant" && !thinkingDebugBySession.has(payload.sessionKey)) {
         thinkingDebugBySession.add(payload.sessionKey);
         logWarn("No thinking trace extracted from chat event.", {
@@ -579,6 +756,8 @@ export function createGatewayRuntimeEventHandler(
               timestampMs: assistantCompletionAt,
               role: "assistant",
               kind: "meta",
+              entryId: terminalAssistantMetaEntryId(payload.runId ?? null),
+              confirmed: true,
             }
           );
         }
@@ -609,7 +788,12 @@ export function createGatewayRuntimeEventHandler(
           timestampMs: assistantCompletionAt ?? now(),
           role: "assistant",
           kind: "assistant",
+          entryId: terminalAssistantFinalEntryId(payload.runId ?? null),
+          confirmed: true,
         });
+      }
+      if (payload.runId) {
+        markRunTerminalCommit(payload.runId, "chat-final", terminalSeq);
       }
       applyRuntimePolicyIntents(chatIntents, { agentForLatestUpdate: agent });
       return;
@@ -852,55 +1036,66 @@ export function createGatewayRuntimeEventHandler(
     if (transition.kind === "terminal") {
       clearPendingLivePatch(match);
     }
-    if (phase === "end" && !hasChatEvents) {
+    const terminalState = getRunTerminalState(payload.runId, true);
+    const shouldScheduleFallback =
+      phase === "end" && Boolean(terminalState && !terminalState.chatFinalSeen);
+    let deferredClearRunTracking = false;
+    if (shouldScheduleFallback) {
       const normalizedStreamText = agent.streamText
         ? normalizeAssistantDisplayText(agent.streamText)
         : "";
       const finalText = normalizedStreamText.length > 0 ? normalizedStreamText : null;
-      if (finalText) {
-        const assistantCompletionAt = now();
-        const startedAt = thinkingStartedAtByRun.get(payload.runId);
-        const thinkingDurationMs =
-          typeof startedAt === "number"
-            ? Math.max(0, assistantCompletionAt - startedAt)
-            : null;
-        dispatchOutput(
-          match,
-          formatMetaMarkdown({
-            role: "assistant",
-            timestamp: assistantCompletionAt,
-            thinkingDurationMs,
-          }),
-          {
-            source: "runtime-agent",
+      if (finalText && terminalState) {
+        cancelLifecycleFallback(payload.runId);
+        const fallbackTimerId = deps.setTimeout(() => {
+          const currentState = getRunTerminalState(payload.runId, false);
+          if (!currentState) return;
+          currentState.fallbackTimerId = null;
+          if (currentState.chatFinalSeen) return;
+          const assistantCompletionAt = now();
+          const startedAt = thinkingStartedAtByRun.get(payload.runId);
+          const thinkingDurationMs =
+            typeof startedAt === "number"
+              ? Math.max(0, assistantCompletionAt - startedAt)
+              : null;
+          appendTerminalAssistantCompletion({
+            agentId: match,
             runId: payload.runId,
             sessionKey: payload.sessionKey ?? agent.sessionKey,
-            timestampMs: assistantCompletionAt,
-            role: "assistant",
-            kind: "meta",
-          }
-        );
-        dispatchOutput(match, finalText, {
-          source: "runtime-agent",
-          runId: payload.runId,
-          sessionKey: payload.sessionKey ?? agent.sessionKey,
-          timestampMs: assistantCompletionAt,
-          role: "assistant",
-          kind: "assistant",
-        });
-        deps.dispatch({
-          type: "updateAgent",
-          agentId: match,
-          patch: {
-            lastResult: finalText,
-            lastAssistantMessageAt: assistantCompletionAt,
-          },
-        });
+            source: "runtime-agent",
+            assistantCompletionAt,
+            thinkingDurationMs,
+            finalText,
+            confirmed: false,
+          });
+          deps.dispatch({
+            type: "updateAgent",
+            agentId: match,
+            patch: {
+              lastResult: finalText,
+              lastAssistantMessageAt: assistantCompletionAt,
+            },
+          });
+          markRunTerminalCommit(payload.runId, "lifecycle-fallback", null);
+          markRunClosed(payload.runId);
+          clearRunTracking(payload.runId);
+        }, LIFECYCLE_FALLBACK_DELAY_MS);
+        terminalState.fallbackTimerId = fallbackTimerId;
+        deferredClearRunTracking = true;
+      } else {
+        clearRunTerminalState(payload.runId);
+      }
+    } else if (terminalState?.fallbackTimerId !== null) {
+      cancelLifecycleFallback(payload.runId);
+      if (terminalState && !terminalState.terminalCommitted && !terminalState.chatFinalSeen) {
+        clearRunTerminalState(payload.runId);
       }
     }
     if (transition.clearRunTracking) {
       markRunClosed(payload.runId);
-      clearRunTracking(payload.runId);
+      if (!deferredClearRunTracking) {
+        clearRunTracking(payload.runId);
+      }
     }
     deps.dispatch({
       type: "updateAgent",

@@ -6,6 +6,9 @@ import {
   formatMetaMarkdown,
   formatThinkingMarkdown,
   isHeartbeatPrompt,
+  isMetaMarkdown,
+  isToolMarkdown,
+  isTraceMarkdown,
   isUiMetadataPrefix,
   stripUiMetadata,
 } from "@/lib/text/message-extract";
@@ -64,6 +67,7 @@ export type ChatEventPayload = {
   runId: string;
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";
+  seq?: number;
   message?: unknown;
   errorMessage?: string;
 };
@@ -253,10 +257,6 @@ export const buildHistoryLines = (messages: ChatHistoryMessage[]): HistoryLinesR
       if (typeof at === "number") {
         lastAssistantAt = at;
       }
-      if (text && !thinking && toolLines.length === 0 && text === lastAssistant) {
-        lastRole = "assistant";
-        continue;
-      }
       if (typeof at === "number") {
         lines.push(formatMetaMarkdown({ role: "assistant", timestamp: at }));
       }
@@ -277,12 +277,7 @@ export const buildHistoryLines = (messages: ChatHistoryMessage[]): HistoryLinesR
       lines.push(text);
     }
   }
-  const deduped: string[] = [];
-  for (const line of lines) {
-    if (deduped[deduped.length - 1] === line) continue;
-    deduped.push(line);
-  }
-  return { lines: deduped, lastAssistant, lastAssistantAt, lastRole, lastUser };
+  return { lines, lastAssistant, lastAssistantAt, lastRole, lastUser };
 };
 
 export const mergeHistoryWithPending = (
@@ -297,8 +292,28 @@ export const mergeHistoryWithPending = (
     return normalized || null;
   };
 
+  const isPlainAssistantLine = (line: string): boolean => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith(">")) return false;
+    if (isMetaMarkdown(trimmed)) return false;
+    if (isTraceMarkdown(trimmed)) return false;
+    if (isToolMarkdown(trimmed)) return false;
+    return true;
+  };
+
+  const countLines = (lines: string[]) => {
+    const counts = new Map<string, number>();
+    for (const line of lines) {
+      counts.set(line, (counts.get(line) ?? 0) + 1);
+    }
+    return counts;
+  };
+
   if (currentLines.length === 0) return historyLines;
   if (historyLines.length === 0) return historyLines;
+  const historyCounts = countLines(historyLines);
+  const currentCounts = countLines(currentLines);
   const merged = [...historyLines];
   let cursor = 0;
   for (const line of currentLines) {
@@ -330,7 +345,24 @@ export const mergeHistoryWithPending = (
     merged.splice(cursor, 0, line);
     cursor += 1;
   }
-  return merged;
+  const assistantLineCount = new Map<string, number>();
+  const bounded: string[] = [];
+  for (const line of merged) {
+    if (!isPlainAssistantLine(line)) {
+      bounded.push(line);
+      continue;
+    }
+    const nextCount = (assistantLineCount.get(line) ?? 0) + 1;
+    const historyCount = historyCounts.get(line) ?? 0;
+    const currentCount = currentCounts.get(line) ?? 0;
+    const hasOverlap = historyCount > 0 && currentCount > 0;
+    if (hasOverlap && nextCount > historyCount) {
+      continue;
+    }
+    assistantLineCount.set(line, nextCount);
+    bounded.push(line);
+  }
+  return bounded;
 };
 
 export const buildHistorySyncPatch = ({

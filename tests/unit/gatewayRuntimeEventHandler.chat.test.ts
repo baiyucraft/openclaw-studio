@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createGatewayRuntimeEventHandler } from "@/features/agents/state/gatewayRuntimeEventHandler";
-import type { AgentState } from "@/features/agents/state/store";
+import {
+  agentStoreReducer,
+  initialAgentStoreState,
+  type AgentState,
+  type AgentStoreSeed,
+} from "@/features/agents/state/store";
+import * as transcriptState from "@/features/agents/state/transcript";
 import type { EventFrame } from "@/lib/gateway/GatewayClient";
 
 const createAgent = (overrides?: Partial<AgentState>): AgentState => {
@@ -351,9 +357,239 @@ describe("gateway runtime event handler (chat)", () => {
     }
   });
 
-  it("ignores_replayed_terminal_chat_events_for_same_run", () => {
+  it("replaces committed lifecycle fallback with canonical chat final in reducer state", () => {
+    vi.useFakeTimers();
+    const metricSpy = vi
+      .spyOn(transcriptState, "logTranscriptDebugMetric")
+      .mockImplementation(() => {});
+    try {
+      const agents = [
+        createAgent({
+          status: "running",
+          runId: "run-1",
+          runStartedAt: 900,
+          streamText: "fallback final",
+        }),
+      ];
+      const dispatched: Array<Record<string, unknown>> = [];
+      const dispatch = vi.fn((action) => {
+        dispatched.push(action as never);
+      });
+      const handler = createGatewayRuntimeEventHandler({
+        getStatus: () => "connected",
+        getAgents: () => agents,
+        dispatch,
+        queueLivePatch: vi.fn(),
+        clearPendingLivePatch: vi.fn(),
+        now: () => 1000,
+        loadSummarySnapshot: vi.fn(async () => {}),
+        requestHistoryRefresh: vi.fn(async () => {}),
+        refreshHeartbeatLatestUpdate: vi.fn(),
+        bumpHeartbeatTick: vi.fn(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
+        isDisconnectLikeError: () => false,
+        logWarn: vi.fn(),
+        updateSpecialLatestUpdate: vi.fn(),
+      });
+
+      handler.handleEvent({
+        type: "event",
+        event: "agent",
+        payload: {
+          runId: "run-1",
+          sessionKey: agents[0]!.sessionKey,
+          stream: "lifecycle",
+          data: { phase: "end" },
+        },
+      } as EventFrame);
+      vi.advanceTimersByTime(400);
+
+      expect(
+        dispatched.some(
+          (entry) =>
+            entry.type === "appendOutput" &&
+            entry.line === "fallback final" &&
+            typeof entry.transcript === "object"
+        )
+      ).toBe(true);
+
+      const event: EventFrame = {
+        type: "event",
+        event: "chat",
+        payload: {
+          runId: "run-1",
+          sessionKey: agents[0]!.sessionKey,
+          state: "final",
+          message: { role: "assistant", content: "canonical final" },
+        },
+      };
+      handler.handleEvent(event);
+
+      const seed: AgentStoreSeed = {
+        agentId: "agent-1",
+        name: "Agent One",
+        sessionKey: agents[0]!.sessionKey,
+      };
+      let state = agentStoreReducer(initialAgentStoreState, {
+        type: "hydrateAgents",
+        agents: [seed],
+      });
+      state = agentStoreReducer(state, {
+        type: "updateAgent",
+        agentId: "agent-1",
+        patch: {
+          status: "running",
+          runId: "run-1",
+          runStartedAt: 900,
+          streamText: "fallback final",
+        },
+      });
+      for (const action of dispatched) {
+        if (!action || typeof action !== "object") continue;
+        if (typeof (action as { type?: unknown }).type !== "string") continue;
+        state = agentStoreReducer(state, action as never);
+      }
+      const agentState = state.agents.find((entry) => entry.agentId === "agent-1");
+      const transcriptEntries = agentState?.transcriptEntries ?? [];
+      const assistantEntries = transcriptEntries.filter((entry) => entry.kind === "assistant");
+      const assistantMetaEntries = transcriptEntries.filter(
+        (entry) => entry.kind === "meta" && entry.role === "assistant"
+      );
+
+      expect(assistantEntries).toHaveLength(1);
+      expect(assistantEntries[0]?.text).toBe("canonical final");
+      expect(assistantMetaEntries).toHaveLength(1);
+      expect(metricSpy).toHaveBeenCalledWith(
+        "lifecycle_fallback_replaced_by_chat_final",
+        expect.objectContaining({ runId: "run-1" })
+      );
+    } finally {
+      metricSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores terminal chat events with same-or-lower payload sequence for a run", () => {
+    const metricSpy = vi
+      .spyOn(transcriptState, "logTranscriptDebugMetric")
+      .mockImplementation(() => {});
+    try {
+      const agents = [createAgent({ status: "running", runId: "run-1", runStartedAt: 900 })];
+      const dispatched: Array<Record<string, unknown>> = [];
+      const dispatch = vi.fn((action) => {
+        dispatched.push(action as never);
+      });
+      const handler = createGatewayRuntimeEventHandler({
+        getStatus: () => "connected",
+        getAgents: () => agents,
+        dispatch,
+        queueLivePatch: vi.fn(),
+        clearPendingLivePatch: vi.fn(),
+        now: () => 1000,
+        loadSummarySnapshot: vi.fn(async () => {}),
+        requestHistoryRefresh: vi.fn(async () => {}),
+        refreshHeartbeatLatestUpdate: vi.fn(),
+        bumpHeartbeatTick: vi.fn(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown as number,
+        clearTimeout: (id) => clearTimeout(id as unknown as NodeJS.Timeout),
+        isDisconnectLikeError: () => false,
+        logWarn: vi.fn(),
+        updateSpecialLatestUpdate: vi.fn(),
+      });
+
+      handler.handleEvent({
+        type: "event",
+        event: "chat",
+        payload: {
+          runId: "run-1",
+          seq: 4,
+          sessionKey: agents[0]!.sessionKey,
+          state: "final",
+          message: { role: "assistant", content: "final seq 4" },
+        },
+      });
+      handler.handleEvent({
+        type: "event",
+        event: "chat",
+        payload: {
+          runId: "run-1",
+          seq: 4,
+          sessionKey: agents[0]!.sessionKey,
+          state: "final",
+          message: { role: "assistant", content: "final seq 4 replay" },
+        },
+      });
+      handler.handleEvent({
+        type: "event",
+        event: "chat",
+        payload: {
+          runId: "run-1",
+          seq: 3,
+          sessionKey: agents[0]!.sessionKey,
+          state: "final",
+          message: { role: "assistant", content: "final seq 3 stale" },
+        },
+      });
+
+      const seed: AgentStoreSeed = {
+        agentId: "agent-1",
+        name: "Agent One",
+        sessionKey: agents[0]!.sessionKey,
+      };
+      let state = agentStoreReducer(initialAgentStoreState, {
+        type: "hydrateAgents",
+        agents: [seed],
+      });
+      state = agentStoreReducer(state, {
+        type: "updateAgent",
+        agentId: "agent-1",
+        patch: {
+          status: "running",
+          runId: "run-1",
+          runStartedAt: 900,
+        },
+      });
+      for (const action of dispatched) {
+        if (!action || typeof action !== "object") continue;
+        if (typeof (action as { type?: unknown }).type !== "string") continue;
+        state = agentStoreReducer(state, action as never);
+      }
+      const agentState = state.agents.find((entry) => entry.agentId === "agent-1");
+      const assistantEntries = (agentState?.transcriptEntries ?? []).filter(
+        (entry) => entry.kind === "assistant"
+      );
+
+      expect(assistantEntries).toHaveLength(1);
+      expect(assistantEntries[0]?.text).toBe("final seq 4");
+      const staleCalls = metricSpy.mock.calls.filter(
+        (call) => call[0] === "stale_terminal_chat_event_ignored"
+      );
+      expect(staleCalls).toHaveLength(2);
+      expect(staleCalls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          runId: "run-1",
+          seq: 4,
+          lastTerminalSeq: 4,
+          commitSource: "chat-final",
+        })
+      );
+      expect(staleCalls[1]?.[1]).toEqual(
+        expect.objectContaining({
+          runId: "run-1",
+          seq: 3,
+          lastTerminalSeq: 4,
+          commitSource: "chat-final",
+        })
+      );
+    } finally {
+      metricSpy.mockRestore();
+    }
+  });
+
+  it("accepts higher-sequence terminal chat events and keeps newest final text", () => {
     const agents = [createAgent({ status: "running", runId: "run-1", runStartedAt: 900 })];
-    const dispatched: Array<{ type: string; agentId: string; line?: string }> = [];
+    const dispatched: Array<Record<string, unknown>> = [];
     const dispatch = vi.fn((action) => {
       dispatched.push(action as never);
     });
@@ -375,24 +611,59 @@ describe("gateway runtime event handler (chat)", () => {
       updateSpecialLatestUpdate: vi.fn(),
     });
 
-    const event: EventFrame = {
+    handler.handleEvent({
       type: "event",
       event: "chat",
       payload: {
         runId: "run-1",
+        seq: 2,
         sessionKey: agents[0]!.sessionKey,
         state: "final",
-        message: { role: "assistant", content: "Done" },
+        message: { role: "assistant", content: "final seq 2" },
       },
+    });
+    handler.handleEvent({
+      type: "event",
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        seq: 3,
+        sessionKey: agents[0]!.sessionKey,
+        state: "final",
+        message: { role: "assistant", content: "final seq 3" },
+      },
+    });
+
+    const seed: AgentStoreSeed = {
+      agentId: "agent-1",
+      name: "Agent One",
+      sessionKey: agents[0]!.sessionKey,
     };
-
-    handler.handleEvent(event);
-    handler.handleEvent(event);
-
-    const doneLines = dispatched.filter(
-      (entry) => entry.type === "appendOutput" && entry.line === "Done"
+    let state = agentStoreReducer(initialAgentStoreState, {
+      type: "hydrateAgents",
+      agents: [seed],
+    });
+    state = agentStoreReducer(state, {
+      type: "updateAgent",
+      agentId: "agent-1",
+      patch: {
+        status: "running",
+        runId: "run-1",
+        runStartedAt: 900,
+      },
+    });
+    for (const action of dispatched) {
+      if (!action || typeof action !== "object") continue;
+      if (typeof (action as { type?: unknown }).type !== "string") continue;
+      state = agentStoreReducer(state, action as never);
+    }
+    const agentState = state.agents.find((entry) => entry.agentId === "agent-1");
+    const assistantEntries = (agentState?.transcriptEntries ?? []).filter(
+      (entry) => entry.kind === "assistant"
     );
-    expect(doneLines).toHaveLength(1);
+
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]?.text).toBe("final seq 3");
   });
 
   it("ignores terminal chat events for non-active runIds", () => {

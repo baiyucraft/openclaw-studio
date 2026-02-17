@@ -10,6 +10,8 @@ import {
   buildOutputLinesFromTranscriptEntries,
   buildTranscriptEntriesFromLines,
   mergeTranscriptEntriesWithHistory,
+  sortTranscriptEntries,
+  type TranscriptEntry,
 } from "@/features/agents/state/transcript";
 import { normalizeAssistantDisplayText } from "@/lib/text/assistantText";
 
@@ -82,6 +84,65 @@ const areStringArraysEqual = (left: string[], right: string[]): boolean => {
     if (left[i] !== right[i]) return false;
   }
   return true;
+};
+
+const scoreResolvedRunAssistantEntry = (entry: TranscriptEntry): number => {
+  let score = 0;
+  if (entry.confirmed) score += 4;
+  if (entry.source === "runtime-chat") score += 2;
+  if (entry.source === "history") score += 1;
+  if (typeof entry.timestampMs === "number" && Number.isFinite(entry.timestampMs)) {
+    score += 1;
+  }
+  return score;
+};
+
+const collapseNonActiveRunAssistantDuplicates = (
+  entries: TranscriptEntry[],
+  activeRunId: string
+): TranscriptEntry[] => {
+  const normalizedActiveRunId = activeRunId.trim();
+  const next: TranscriptEntry[] = [];
+  const byRunAssistantText = new Map<string, number>();
+  for (const entry of entries) {
+    const normalizedRunId = entry.runId?.trim() ?? "";
+    const isResolvedRunAssistant =
+      normalizedRunId.length > 0 &&
+      normalizedRunId !== normalizedActiveRunId &&
+      entry.kind === "assistant" &&
+      entry.role === "assistant";
+    if (!isResolvedRunAssistant) {
+      next.push(entry);
+      continue;
+    }
+    const dedupeKey = normalizeAssistantDisplayText(entry.text);
+    if (!dedupeKey) {
+      next.push(entry);
+      continue;
+    }
+    const runScopedKey = `${normalizedRunId}:${dedupeKey}`;
+    const existingIndex = byRunAssistantText.get(runScopedKey);
+    if (existingIndex === undefined) {
+      byRunAssistantText.set(runScopedKey, next.length);
+      next.push(entry);
+      continue;
+    }
+    const current = next[existingIndex];
+    if (!current) {
+      byRunAssistantText.set(runScopedKey, next.length);
+      next.push(entry);
+      continue;
+    }
+    const currentScore = scoreResolvedRunAssistantEntry(current);
+    const nextScore = scoreResolvedRunAssistantEntry(entry);
+    const shouldReplace =
+      nextScore > currentScore ||
+      (nextScore === currentScore && entry.sequenceKey > current.sequenceKey);
+    if (shouldReplace) {
+      next[existingIndex] = entry;
+    }
+  }
+  return sortTranscriptEntries(next);
 };
 
 export const runHistorySyncOperation = async (
@@ -171,14 +232,22 @@ export const runHistorySyncOperation = async (
         startSequence: latest.transcriptSequenceCounter ?? existingEntries.length,
         confirmed: true,
       });
-      const historyEntries = rawHistoryEntries.map((entry) => ({
-        ...entry,
-        entryId: `history:${requestIntent.sessionKey}:${entry.kind}:${entry.role}:${entry.timestampMs ?? "none"}:${entry.fingerprint}`,
-      }));
+      const historyEntryOccurrenceByKey = new Map<string, number>();
+      const historyEntries = rawHistoryEntries.map((entry) => {
+        const identityKey = `${entry.kind}:${entry.role}:${entry.timestampMs ?? "none"}:${entry.fingerprint}`;
+        const occurrence = historyEntryOccurrenceByKey.get(identityKey) ?? 0;
+        historyEntryOccurrenceByKey.set(identityKey, occurrence + 1);
+        return {
+          ...entry,
+          entryId: `history:${requestIntent.sessionKey}:${identityKey}:occ:${occurrence}`,
+        };
+      });
       const merged = mergeTranscriptEntriesWithHistory({
         existingEntries,
         historyEntries,
       });
+      const activeRunId = latest.status === "running" ? (latest.runId?.trim() ?? "") : "";
+      const finalEntries = collapseNonActiveRunAssistantDuplicates(merged.entries, activeRunId);
       if (merged.conflictCount > 0) {
         commands.push({
           kind: "logMetric",
@@ -190,8 +259,8 @@ export const runHistorySyncOperation = async (
           },
         });
       }
-      const mergedLines = buildOutputLinesFromTranscriptEntries(merged.entries);
-      const transcriptChanged = !areTranscriptEntriesEqual(existingEntries, merged.entries);
+      const mergedLines = buildOutputLinesFromTranscriptEntries(finalEntries);
+      const transcriptChanged = !areTranscriptEntriesEqual(existingEntries, finalEntries);
       const linesChanged = !areStringArraysEqual(latest.outputLines, mergedLines);
       commands.push({
         kind: "dispatchUpdateAgent",
@@ -200,7 +269,7 @@ export const runHistorySyncOperation = async (
           ...metadataPatch,
           ...(transcriptChanged || linesChanged
             ? {
-                transcriptEntries: merged.entries,
+                transcriptEntries: finalEntries,
                 outputLines: mergedLines,
               }
             : {}),

@@ -30,7 +30,7 @@ describe("runtime event policy", () => {
       nextText: "hello",
       hasThinkingStarted: false,
       isClosedRun: false,
-      isTerminalRunSeen: false,
+      isStaleTerminal: false,
       shouldRequestHistoryRefresh: false,
       shouldUpdateLastResult: false,
       shouldSetRunIdle: false,
@@ -58,7 +58,7 @@ describe("runtime event policy", () => {
       nextText: "answer",
       hasThinkingStarted: false,
       isClosedRun: false,
-      isTerminalRunSeen: false,
+      isStaleTerminal: false,
       shouldRequestHistoryRefresh: false,
       shouldUpdateLastResult: false,
       shouldSetRunIdle: false,
@@ -100,7 +100,7 @@ describe("runtime event policy", () => {
       nextText: "Done",
       hasThinkingStarted: true,
       isClosedRun: false,
-      isTerminalRunSeen: false,
+      isStaleTerminal: false,
       shouldRequestHistoryRefresh: true,
       shouldUpdateLastResult: true,
       shouldSetRunIdle: true,
@@ -114,10 +114,6 @@ describe("runtime event policy", () => {
     expect(findIntent(intents, "clearPendingLivePatch")).toEqual({
       kind: "clearPendingLivePatch",
       agentId: "agent-1",
-    });
-    expect(findIntent(intents, "markTerminalRunSeen")).toEqual({
-      kind: "markTerminalRunSeen",
-      runId: "run-1",
     });
     expect(findIntent(intents, "markRunClosed")).toEqual({
       kind: "markRunClosed",
@@ -151,7 +147,7 @@ describe("runtime event policy", () => {
     });
   });
 
-  it("returns_ignore_for_duplicate_terminal_chat_run", () => {
+  it("returns_ignore_for_stale_terminal_chat_event", () => {
     const intents = decideRuntimeChatEvent({
       agentId: "agent-1",
       state: "final",
@@ -165,7 +161,7 @@ describe("runtime event policy", () => {
       nextText: "Done",
       hasThinkingStarted: true,
       isClosedRun: false,
-      isTerminalRunSeen: true,
+      isStaleTerminal: true,
       shouldRequestHistoryRefresh: false,
       shouldUpdateLastResult: false,
       shouldSetRunIdle: true,
@@ -176,7 +172,7 @@ describe("runtime event policy", () => {
       latestUpdateMessage: null,
     });
 
-    expect(intents).toEqual([{ kind: "ignore", reason: "terminal-run-seen" }]);
+    expect(intents).toEqual([{ kind: "ignore", reason: "stale-terminal-event" }]);
   });
 
   it("returns_agent_preflight_intents_for_closed_or_stale_runs", () => {

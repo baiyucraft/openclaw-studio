@@ -348,13 +348,43 @@ const reducer = (state: AgentStoreState, action: Action): AgentStoreState => {
           if (!nextEntry) {
             return { ...agent, outputLines: [...agent.outputLines, action.line] };
           }
-          const appended = [...existingEntries, nextEntry];
-          const nextEntries = TRANSCRIPT_V2_ENABLED ? sortTranscriptEntries(appended) : appended;
+          const nextEntryId = nextEntry.entryId.trim();
+          const existingIndex =
+            nextEntryId.length > 0
+              ? existingEntries.findIndex((entry) => entry.entryId === nextEntryId)
+              : -1;
+          const hasReplacement = existingIndex >= 0;
+
+          let nextEntries: TranscriptEntry[];
+          if (hasReplacement) {
+            let replacedOne = false;
+            const replaced = existingEntries.reduce<TranscriptEntry[]>((acc, entry) => {
+              if (entry.entryId !== nextEntryId) {
+                acc.push(entry);
+                return acc;
+              }
+              if (replacedOne) {
+                return acc;
+              }
+              replacedOne = true;
+              acc.push({
+                ...nextEntry,
+                sequenceKey: entry.sequenceKey,
+              });
+              return acc;
+            }, []);
+            nextEntries = TRANSCRIPT_V2_ENABLED ? sortTranscriptEntries(replaced) : replaced;
+          } else {
+            const appended = [...existingEntries, nextEntry];
+            nextEntries = TRANSCRIPT_V2_ENABLED ? sortTranscriptEntries(appended) : appended;
+          }
+
           return {
             ...agent,
-            outputLines: TRANSCRIPT_V2_ENABLED
-              ? buildOutputLinesFromTranscriptEntries(nextEntries)
-              : [...agent.outputLines, action.line],
+            outputLines:
+              TRANSCRIPT_V2_ENABLED || hasReplacement
+                ? buildOutputLinesFromTranscriptEntries(nextEntries)
+                : [...agent.outputLines, action.line],
             transcriptEntries: nextEntries,
             transcriptRevision: (agent.transcriptRevision ?? 0) + 1,
             transcriptSequenceCounter: Math.max(

@@ -277,7 +277,7 @@ describe("runtime event bridge helpers", () => {
     ]);
   });
 
-  it("extracts history lines with heartbeat filtering, thinking/tool lines, and dedupe", () => {
+  it("extracts history lines with heartbeat filtering and preserves canonical repeats", () => {
     const history = buildHistoryLines([
       { role: "user", content: "Read HEARTBEAT.md if it exists\nHeartbeat file path: /tmp/HEARTBEAT.md" },
       { role: "user", content: "Project path: /tmp/project\n\nhello there" },
@@ -307,6 +307,8 @@ describe("runtime event bridge helpers", () => {
       "> hello there",
       '[[meta]]{"role":"assistant","timestamp":1704067200000}',
       "[[trace]]\n_step one_",
+      "assistant final",
+      '[[meta]]{"role":"assistant","timestamp":1704067201000}',
       "assistant final",
       "[[tool-result]] shell (call-1)\nok\n```text\ndone\n```",
     ]);
@@ -348,6 +350,8 @@ describe("runtime event bridge helpers", () => {
     expect(history.lines).toEqual([
       '[[meta]]{"role":"assistant","timestamp":1704067200000}',
       assistantMarkdown,
+      '[[meta]]{"role":"assistant","timestamp":1704067201000}',
+      assistantMarkdown,
       "[[tool-result]] shell (call-2)\nok\n```text\ndone\n```",
     ]);
     expect(history.lastAssistant).toBe(assistantMarkdown);
@@ -372,6 +376,33 @@ describe("runtime event bridge helpers", () => {
     expect(mergeHistoryWithPending(["a", "c"], ["a", "b", "c"])).toEqual(["a", "b", "c"]);
     expect(mergeHistoryWithPending([], ["a", "b"])).toEqual([]);
     expect(mergeHistoryWithPending(["a", "b"], [])).toEqual(["a", "b"]);
+  });
+
+  it("collapses duplicate plain assistant lines only when history and pending both contain them", () => {
+    expect(mergeHistoryWithPending(["> q", "final"], ["> q", "final", "final"])).toEqual([
+      "> q",
+      "final",
+    ]);
+    expect(mergeHistoryWithPending(["> q", "final", "final"], ["> q"])).toEqual([
+      "> q",
+      "final",
+      "final",
+    ]);
+  });
+
+  it("caps overlapping assistant duplicate counts to canonical history counts", () => {
+    expect(mergeHistoryWithPending(["a", "b", "a"], ["a", "a", "b", "a"])).toEqual([
+      "a",
+      "b",
+      "a",
+    ]);
+  });
+
+  it("preserves repeated tool and meta lines during history merge", () => {
+    const tool = "[[tool]] shell (call-1)\n```json\n{}\n```";
+    const meta = '[[meta]]{"role":"assistant","timestamp":1704067200000}';
+    expect(mergeHistoryWithPending([tool], [tool, tool])).toEqual([tool, tool]);
+    expect(mergeHistoryWithPending([meta], [meta, meta])).toEqual([meta, meta]);
   });
 
   it("builds history sync patches for empty, unchanged, and merged cases", () => {

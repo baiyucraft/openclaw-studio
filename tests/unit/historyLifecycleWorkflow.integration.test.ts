@@ -171,4 +171,31 @@ describe("historyLifecycleWorkflow integration", () => {
     expect(result.next.lastResult).toBe("Merged answer");
     expect(result.next.lastAppliedHistoryRequestId).toBe("req-1");
   });
+
+  it("page adapter collapses duplicate terminal assistant lines after reconcile-driven history apply", () => {
+    const requestAgent = createAgent({
+      status: "running",
+      runId: "run-1",
+      outputLines: ["> question", "final answer", "final answer"],
+      transcriptRevision: 5,
+    });
+    const latest = createAgent({
+      status: "idle",
+      runId: null,
+      outputLines: ["> question", "final answer", "final answer"],
+      transcriptRevision: 6,
+    });
+
+    const result = runPageHistoryAdapter({
+      requestAgent,
+      latestAgent: latest,
+      messages: [
+        { role: "user", content: "question" },
+        { role: "assistant", content: "final answer" },
+      ],
+    });
+
+    expect(result.disposition).toBe("apply");
+    expect(result.next.outputLines.filter((line) => line === "final answer")).toHaveLength(1);
+  });
 });

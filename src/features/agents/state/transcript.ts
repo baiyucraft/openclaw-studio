@@ -99,7 +99,6 @@ const SOURCE_ORDER: Record<TranscriptEntrySource, number> = {
 };
 
 const BUCKET_MS = 2_000;
-const MERGE_TIMESTAMP_TOLERANCE_MS = 60_000;
 
 const normalizeComparableText = (value: string): string => {
   return value.replace(/\s+/g, " ").trim();
@@ -371,14 +370,6 @@ const findHistoryMatchCandidateIndex = (
     if (candidate.sessionKey !== historyEntry.sessionKey) continue;
     if (candidate.kind !== historyEntry.kind || candidate.role !== historyEntry.role) continue;
     if (normalizeComparableText(candidate.text) !== normalizedTarget) continue;
-    if (
-      hasNumericTimestamp(candidate.timestampMs) &&
-      hasNumericTimestamp(historyEntry.timestampMs) &&
-      Math.abs(candidate.timestampMs - historyEntry.timestampMs) >
-        MERGE_TIMESTAMP_TOLERANCE_MS
-    ) {
-      continue;
-    }
     candidates.push(i);
   }
   if (candidates.length === 0) return null;
@@ -423,8 +414,7 @@ export const mergeTranscriptEntriesWithHistory = (params: {
       next[existingById] = {
         ...current,
         confirmed: true,
-        timestampMs:
-          current.timestampMs ?? historyEntry.timestampMs ?? current.timestampMs,
+        timestampMs: historyEntry.timestampMs ?? current.timestampMs,
       };
       continue;
     }
@@ -438,8 +428,7 @@ export const mergeTranscriptEntriesWithHistory = (params: {
       next[matched.index] = {
         ...current,
         confirmed: true,
-        timestampMs:
-          current.timestampMs ?? historyEntry.timestampMs ?? current.timestampMs,
+        timestampMs: historyEntry.timestampMs ?? current.timestampMs,
         runId: current.runId ?? historyEntry.runId,
       };
       confirmedCount += 1;
