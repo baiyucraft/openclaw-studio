@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { AgentState } from "@/features/agents/state/store";
 import { AgentChatPanel } from "@/features/agents/components/AgentChatPanel";
 import type { GatewayModelChoice } from "@/lib/gateway/models";
@@ -83,9 +83,11 @@ describe("AgentChatPanel markdown rendering", () => {
     expect(screen.queryByText(/^Output$/)).not.toBeInTheDocument();
     expect(screen.queryByText("Extract output")).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByText("Thinking (internal)"));
     const toolSummary = screen.getByText("SHELL · ok");
     const toolDetails = toolSummary.closest("details");
     expect(toolDetails).toBeTruthy();
+    fireEvent.click(toolSummary);
     expect(within(toolDetails as HTMLElement).getByText("done")).toBeInTheDocument();
   });
 
@@ -130,6 +132,7 @@ describe("AgentChatPanel markdown rendering", () => {
 
     const thinkingDetails = screen.getByText("Thinking (internal)").closest("details");
     expect(thinkingDetails).toBeTruthy();
+    fireEvent.click(screen.getByText("Thinking (internal)"));
     expect(within(thinkingDetails as HTMLElement).getByText(/proposing multi-lane tracking system/i)).toBeInTheDocument();
 
     const memorySearchSummaries = screen.getAllByText(/MEMORY_SEARCH/);
@@ -167,6 +170,7 @@ describe("AgentChatPanel markdown rendering", () => {
       })
     );
 
+    fireEvent.click(screen.getByText("Thinking (internal)"));
     expect(screen.getByText("read /tmp/README.md")).toBeInTheDocument();
     expect(screen.queryByText("read /tmp/README.md", { selector: "summary" })).toBeNull();
     expect(screen.queryByText(/"file_path"/)).toBeNull();

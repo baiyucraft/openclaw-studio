@@ -197,6 +197,36 @@ describe("agent store", () => {
     expect(next?.runId).toBeNull();
   });
 
+  it("keeps_transcript_references_for_non_transcript_agent_updates", () => {
+    const seed: AgentStoreSeed = {
+      agentId: "agent-1",
+      name: "Agent One",
+      sessionKey: "agent:agent-1:main",
+    };
+    let state = agentStoreReducer(initialAgentStoreState, {
+      type: "hydrateAgents",
+      agents: [seed],
+    });
+    state = agentStoreReducer(state, {
+      type: "updateAgent",
+      agentId: "agent-1",
+      patch: { outputLines: ["> hello", "response"] },
+    });
+
+    const beforeDraftUpdate = state.agents[0];
+
+    state = agentStoreReducer(state, {
+      type: "updateAgent",
+      agentId: "agent-1",
+      patch: { draft: "x" },
+    });
+    const afterDraftUpdate = state.agents[0];
+
+    expect(afterDraftUpdate.outputLines).toBe(beforeDraftUpdate.outputLines);
+    expect(afterDraftUpdate.transcriptEntries).toBe(beforeDraftUpdate.transcriptEntries);
+    expect(afterDraftUpdate.transcriptSequenceCounter).toBe(beforeDraftUpdate.transcriptSequenceCounter);
+  });
+
   it("tracks_unseen_activity_for_non_selected_agents", () => {
     const seeds: AgentStoreSeed[] = [
       {

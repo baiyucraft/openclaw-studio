@@ -265,47 +265,53 @@ const reducer = (state: AgentStoreState, action: Action): AgentStoreState => {
           const patch = action.patch;
           const nextSessionKey = (patch.sessionKey ?? agent.sessionKey).trim();
           const sessionKeyChanged = nextSessionKey !== agent.sessionKey.trim();
+          const patchHasTranscriptEntries = Array.isArray(patch.transcriptEntries);
+          const patchHasOutputLines = Array.isArray(patch.outputLines);
+          const patchMutatesTranscript = patchHasTranscriptEntries || patchHasOutputLines;
 
           const existingEntries = ensureTranscriptEntries(agent);
           const base: AgentState = { ...agent, ...patch };
-          let nextEntries = Array.isArray(base.transcriptEntries)
-            ? [...base.transcriptEntries]
-            : existingEntries;
-          let nextOutputLines = Array.isArray(base.outputLines)
-            ? [...base.outputLines]
-            : [...agent.outputLines];
+          let nextEntries: TranscriptEntry[] = existingEntries;
+          if (Array.isArray(base.transcriptEntries)) {
+            nextEntries = base.transcriptEntries as TranscriptEntry[];
+          }
+          let nextOutputLines: string[] = agent.outputLines;
+          if (Array.isArray(base.outputLines)) {
+            nextOutputLines = base.outputLines as string[];
+          }
           let transcriptMutated = false;
 
-          if (Array.isArray(patch.transcriptEntries)) {
+          if (patchHasTranscriptEntries) {
+            const patchedTranscriptEntries = patch.transcriptEntries as TranscriptEntry[];
             const normalized = TRANSCRIPT_V2_ENABLED
-              ? sortTranscriptEntries(patch.transcriptEntries)
-              : [...patch.transcriptEntries];
+              ? sortTranscriptEntries(patchedTranscriptEntries)
+              : [...patchedTranscriptEntries];
             transcriptMutated = !areTranscriptEntriesEqual(existingEntries, normalized);
             nextEntries = normalized;
             nextOutputLines = buildOutputLinesFromTranscriptEntries(normalized);
-          } else if (Array.isArray(patch.outputLines)) {
+          } else if (patchHasOutputLines) {
+            const patchedOutputLines = patch.outputLines as string[];
             const rebuilt = buildTranscriptEntriesFromLines({
-              lines: patch.outputLines,
+              lines: patchedOutputLines,
               sessionKey: nextSessionKey || agent.sessionKey,
               source: "legacy",
               startSequence: 0,
               confirmed: true,
             });
             const normalized = TRANSCRIPT_V2_ENABLED ? sortTranscriptEntries(rebuilt) : rebuilt;
-            transcriptMutated = !areStringArraysEqual(agent.outputLines, patch.outputLines);
+            transcriptMutated = !areStringArraysEqual(agent.outputLines, patchedOutputLines);
             nextEntries = normalized;
             nextOutputLines = TRANSCRIPT_V2_ENABLED
               ? buildOutputLinesFromTranscriptEntries(normalized)
-              : [...patch.outputLines];
+              : [...patchedOutputLines];
           }
 
           const revision = transcriptMutated
             ? (agent.transcriptRevision ?? 0) + 1
             : (patch.transcriptRevision ?? agent.transcriptRevision ?? 0);
-          const nextCounter = nextTranscriptSequenceCounter(
-            base.transcriptSequenceCounter,
-            nextEntries
-          );
+          const nextCounter = patchMutatesTranscript
+            ? nextTranscriptSequenceCounter(base.transcriptSequenceCounter, nextEntries)
+            : (base.transcriptSequenceCounter ?? agent.transcriptSequenceCounter ?? 0);
 
           return {
             ...base,

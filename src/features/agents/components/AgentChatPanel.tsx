@@ -184,6 +184,7 @@ const ToolCallDetails = memo(function ToolCallDetails({
   className?: string;
 }) {
   const { summaryText, body, inlineOnly } = summarizeToolLabel(line);
+  const [open, setOpen] = useState(false);
   const resolvedClassName =
     className ??
     `w-full ${ASSISTANT_MAX_WIDTH_EXPANDED_CLASS} ${ASSISTANT_GUTTER_CLASS} self-start rounded-[8px] border border-border/70 bg-surface-3 px-2 py-1 text-[10px] text-muted-foreground`;
@@ -195,13 +196,17 @@ const ToolCallDetails = memo(function ToolCallDetails({
     );
   }
   return (
-    <details
-      className={resolvedClassName}
-    >
-      <summary className="cursor-pointer select-none font-mono text-[10px] font-semibold tracking-[0.11em]">
+    <details open={open} className={resolvedClassName}>
+      <summary
+        className="cursor-pointer select-none font-mono text-[10px] font-semibold tracking-[0.11em]"
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+      >
         {summaryText}
       </summary>
-      {body ? (
+      {open && body ? (
         <div className="agent-markdown agent-tool-markdown mt-1 text-foreground">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {rewriteMediaLinesToMarkdown(body)}
@@ -225,6 +230,7 @@ const ThinkingDetailsRow = memo(function ThinkingDetailsRow({
   durationMs?: number;
   showTyping?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const traceEvents = (() => {
     if (events && events.length > 0) return events;
     const normalizedThinkingText = thinkingText?.trim() ?? "";
@@ -239,8 +245,17 @@ const ThinkingDetailsRow = memo(function ThinkingDetailsRow({
   })();
   if (traceEvents.length === 0) return null;
   return (
-    <details className="group rounded-[8px] border border-border/70 bg-surface-2 px-2 py-1.5 text-[10px] text-muted-foreground/80">
-      <summary className="flex cursor-pointer list-none items-center gap-2 opacity-65 [&::-webkit-details-marker]:hidden">
+    <details
+      open={open}
+      className="group rounded-[8px] border border-border/70 bg-surface-2 px-2 py-1.5 text-[10px] text-muted-foreground/80"
+    >
+      <summary
+        className="flex cursor-pointer list-none items-center gap-2 opacity-65 [&::-webkit-details-marker]:hidden"
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+      >
         <ChevronRight className="h-3 w-3 shrink-0 transition group-open:rotate-90" />
         <span className="flex min-w-0 items-center gap-2">
           <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.12em]">
@@ -261,24 +276,26 @@ const ThinkingDetailsRow = memo(function ThinkingDetailsRow({
           ) : null}
         </span>
       </summary>
-      <div className="mt-2 space-y-2 pl-5">
-        {traceEvents.map((event, index) =>
-          event.kind === "thinking" ? (
-            <div
-              key={`thinking-event-${index}-${event.text.slice(0, 48)}`}
-              className="agent-markdown min-w-0 text-foreground/85"
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{event.text}</ReactMarkdown>
-            </div>
-          ) : (
-            <ToolCallDetails
-              key={`thinking-tool-${index}-${event.text.slice(0, 48)}`}
-              line={event.text}
-              className="rounded-[8px] border border-border/70 bg-surface-3 px-2 py-1 text-[10px] text-muted-foreground"
-            />
-          )
-        )}
-      </div>
+      {open ? (
+        <div className="mt-2 space-y-2 pl-5">
+          {traceEvents.map((event, index) =>
+            event.kind === "thinking" ? (
+              <div
+                key={`thinking-event-${index}-${event.text.slice(0, 48)}`}
+                className="agent-markdown min-w-0 text-foreground/85"
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{event.text}</ReactMarkdown>
+              </div>
+            ) : (
+              <ToolCallDetails
+                key={`thinking-tool-${index}-${event.text.slice(0, 48)}`}
+                line={event.text}
+                className="rounded-[8px] border border-border/70 bg-surface-3 px-2 py-1 text-[10px] text-muted-foreground"
+              />
+            )
+          )}
+        </div>
+      ) : null}
     </details>
   );
 });
