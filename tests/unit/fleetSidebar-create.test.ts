@@ -1,0 +1,110 @@
+import { createElement } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { AgentState } from "@/features/agents/state/store";
+import { FleetSidebar } from "@/features/agents/components/FleetSidebar";
+
+const createAgent = (): AgentState => ({
+  agentId: "agent-1",
+  name: "Agent One",
+  sessionKey: "agent:agent-1:studio:test-session",
+  status: "idle",
+  sessionCreated: true,
+  awaitingUserInput: false,
+  hasUnseenActivity: false,
+  outputLines: [],
+  lastResult: null,
+  lastDiff: null,
+  runId: null,
+  runStartedAt: null,
+  streamText: null,
+  thinkingTrace: null,
+  latestOverride: null,
+  latestOverrideKind: null,
+  lastAssistantMessageAt: null,
+  lastActivityAt: null,
+  latestPreview: null,
+  lastUserMessage: null,
+  draft: "",
+  sessionSettingsSynced: true,
+  historyLoadedAt: null,
+  historyFetchLimit: null,
+  historyFetchedCount: null,
+  historyMaybeTruncated: false,
+  toolCallingEnabled: true,
+  showThinkingTraces: true,
+  model: "openai/gpt-5",
+  thinkingLevel: "medium",
+  avatarSeed: "seed-1",
+  avatarUrl: null,
+});
+
+describe("FleetSidebar new agent action", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders New Agent button", () => {
+    render(
+      createElement(FleetSidebar, {
+        agents: [createAgent()],
+        selectedAgentId: "agent-1",
+        filter: "all",
+        onFilterChange: vi.fn(),
+        onSelectAgent: vi.fn(),
+        onCreateAgent: vi.fn(),
+      })
+    );
+
+    expect(screen.getByTestId("fleet-new-agent-button")).toBeInTheDocument();
+    expect(screen.getByText("New Agent")).toBeInTheDocument();
+  });
+
+  it("calls onCreateAgent when clicked", () => {
+    const onCreateAgent = vi.fn();
+    render(
+      createElement(FleetSidebar, {
+        agents: [createAgent()],
+        selectedAgentId: "agent-1",
+        filter: "all",
+        onFilterChange: vi.fn(),
+        onSelectAgent: vi.fn(),
+        onCreateAgent,
+      })
+    );
+
+    fireEvent.click(screen.getByTestId("fleet-new-agent-button"));
+    expect(onCreateAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables create button when createDisabled=true", () => {
+    render(
+      createElement(FleetSidebar, {
+        agents: [createAgent()],
+        selectedAgentId: "agent-1",
+        filter: "all",
+        onFilterChange: vi.fn(),
+        onSelectAgent: vi.fn(),
+        onCreateAgent: vi.fn(),
+        createDisabled: true,
+      })
+    );
+
+    expect(screen.getByTestId("fleet-new-agent-button")).toBeDisabled();
+  });
+
+  it("shows needs approval badge for awaiting agents", () => {
+    render(
+      createElement(FleetSidebar, {
+        agents: [{ ...createAgent(), awaitingUserInput: true }],
+        selectedAgentId: "agent-1",
+        filter: "all",
+        onFilterChange: vi.fn(),
+        onSelectAgent: vi.fn(),
+        onCreateAgent: vi.fn(),
+      })
+    );
+
+    expect(screen.getByText("Needs approval")).toBeInTheDocument();
+  });
+});

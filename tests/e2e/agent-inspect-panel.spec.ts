@@ -1,0 +1,35 @@
+import { expect, test } from "@playwright/test";
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/studio", async (route, request) => {
+    if (request.method() === "PUT") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          settings: { version: 1, gateway: null, focused: {}, avatars: {} },
+        }),
+      });
+      return;
+    }
+    if (request.method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        settings: { version: 1, gateway: null, focused: {}, avatars: {} },
+      }),
+    });
+  });
+});
+
+test("connection panel reflects disconnected state", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByTestId("studio-menu-toggle").click();
+  await page.getByTestId("gateway-settings-toggle").click();
+  await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();
+});
