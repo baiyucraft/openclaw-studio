@@ -196,6 +196,11 @@ const createInitialCronDraft = (): CronCreateDraft => ({
   deliveryChannel: "last",
 });
 
+const arePermissionsDraftEqual = (a: AgentPermissionsDraft, b: AgentPermissionsDraft): boolean =>
+  a.commandMode === b.commandMode &&
+  a.webAccess === b.webAccess &&
+  a.fileTools === b.fileTools;
+
 const applyTemplateDefaults = (templateId: CronCreateTemplateId, current: CronCreateDraft): CronCreateDraft => {
   const nextTimeZone = (current.everyTimeZone ?? "").trim() || resolveLocalTimeZone();
   const base = {
@@ -286,15 +291,19 @@ export const AgentSettingsPanel = ({
   onCreateCronJob = () => {},
   controlUiUrl = null,
 }: AgentSettingsPanelProps) => {
-  const [permissionsDraftValue, setPermissionsDraftValue] = useState<AgentPermissionsDraft>(
-    permissionsDraft ?? resolvePresetDefaultsForRole(resolveExecutionRoleFromAgent(agent))
-  );
+  const initialPermissionsDraft =
+    permissionsDraft ?? resolvePresetDefaultsForRole(resolveExecutionRoleFromAgent(agent));
+  const [permissionsBaselineValue, setPermissionsBaselineValue] =
+    useState<AgentPermissionsDraft>(initialPermissionsDraft);
+  const [permissionsDraftValue, setPermissionsDraftValue] =
+    useState<AgentPermissionsDraft>(initialPermissionsDraft);
   const [permissionsSaving, setPermissionsSaving] = useState(false);
   const [permissionsSaveState, setPermissionsSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [permissionsSaveError, setPermissionsSaveError] = useState<string | null>(null);
   const permissionsSaveTimerRef = useRef<number | null>(null);
+  const permissionsDraftAgentIdRef = useRef(agent.agentId);
   const [expandedCronJobIds, setExpandedCronJobIds] = useState<Set<string>>(() => new Set());
   const [cronCreateOpen, setCronCreateOpen] = useState(false);
   const [cronCreateStep, setCronCreateStep] = useState(0);
@@ -307,19 +316,22 @@ export const AgentSettingsPanel = ({
     [permissionsDraft, resolvedExecutionRole]
   );
   const permissionsDirty = useMemo(
-    () =>
-      permissionsDraftValue.commandMode !== resolvedPermissionsDraft.commandMode ||
-      permissionsDraftValue.webAccess !== resolvedPermissionsDraft.webAccess ||
-      permissionsDraftValue.fileTools !== resolvedPermissionsDraft.fileTools,
-    [permissionsDraftValue, resolvedPermissionsDraft]
+    () => !arePermissionsDraftEqual(permissionsDraftValue, permissionsBaselineValue),
+    [permissionsBaselineValue, permissionsDraftValue]
   );
 
   useEffect(() => {
+    const agentChanged = permissionsDraftAgentIdRef.current !== agent.agentId;
+    permissionsDraftAgentIdRef.current = agent.agentId;
+    setPermissionsBaselineValue(resolvedPermissionsDraft);
+    if (!agentChanged && (permissionsSaving || permissionsDirty)) {
+      return;
+    }
     setPermissionsDraftValue(resolvedPermissionsDraft);
     setPermissionsSaveState("idle");
     setPermissionsSaveError(null);
     setPermissionsSaving(false);
-  }, [agent.agentId, resolvedExecutionRole, resolvedPermissionsDraft]);
+  }, [agent.agentId, permissionsDirty, permissionsSaving, resolvedPermissionsDraft]);
 
   const runPermissionsSave = useCallback(async (draft: AgentPermissionsDraft) => {
     if (permissionsSaving) return;

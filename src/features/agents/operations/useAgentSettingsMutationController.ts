@@ -46,6 +46,7 @@ export type UseAgentSettingsMutationControllerParams = {
     kind: ConfigMutationKind;
     label: string;
     run: () => Promise<void>;
+    requiresIdleAgents?: boolean;
   }) => Promise<void>;
   gatewayConfigSnapshot: GatewayModelPolicySnapshot | null;
   settingsRouteActive: boolean;

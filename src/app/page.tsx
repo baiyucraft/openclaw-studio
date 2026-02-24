@@ -266,7 +266,12 @@ const AgentStudioPage = () => {
     null
   );
   const enqueueConfigMutationRef = useRef<
-    (params: { kind: ConfigMutationKind; label: string; run: () => Promise<void> }) => Promise<void>
+    (params: {
+      kind: ConfigMutationKind;
+      label: string;
+      run: () => Promise<void>;
+      requiresIdleAgents?: boolean;
+    }) => Promise<void>
   >((input) => Promise.reject(new Error(`Config mutation queue not ready for "${input.kind}".`)));
   const approvalPausedRunIdByAgentRef = useRef<Map<string, string>>(new Map());
 
@@ -514,12 +519,16 @@ const AgentStudioPage = () => {
       (createAgentBlock && createAgentBlock.phase !== "queued")
   );
 
-  const { enqueueConfigMutation, queuedCount: queuedConfigMutationCount, activeConfigMutation } =
-    useConfigMutationQueue({
-      status,
-      hasRunningAgents,
-      hasRestartBlockInProgress,
-    });
+  const {
+    enqueueConfigMutation,
+    queuedCount: queuedConfigMutationCount,
+    queuedBlockedByRunningAgents,
+    activeConfigMutation,
+  } = useConfigMutationQueue({
+    status,
+    hasRunningAgents,
+    hasRestartBlockInProgress,
+  });
   enqueueConfigMutationRef.current = enqueueConfigMutation;
 
   useEffect(() => {
@@ -1167,7 +1176,7 @@ const AgentStudioPage = () => {
   const configMutationStatusLine = activeConfigMutation
     ? `Applying config change: ${activeConfigMutation.label}`
     : queuedConfigMutationCount > 0
-      ? hasRunningAgents
+      ? queuedBlockedByRunningAgents
         ? `Queued ${queuedConfigMutationCount} config change${queuedConfigMutationCount === 1 ? "" : "s"}; waiting for ${runningAgentCount} running agent${runningAgentCount === 1 ? "" : "s"} to finish`
         : status !== "connected"
           ? `Queued ${queuedConfigMutationCount} config change${queuedConfigMutationCount === 1 ? "" : "s"}; waiting for gateway connection`

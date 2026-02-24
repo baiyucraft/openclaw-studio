@@ -56,6 +56,7 @@ const createCronJob = (id: string): CronJobSummary => ({
 describe("AgentSettingsPanel", () => {
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
   });
 
   it("does_not_render_name_editor_in_capabilities_mode", () => {
@@ -218,6 +219,61 @@ describe("AgentSettingsPanel", () => {
         });
       },
       { timeout: 2000 }
+    );
+  });
+
+  it("preserves_pending_permissions_toggles_during_props_refresh", () => {
+    const onUpdateAgentPermissions = vi.fn(async () => {});
+
+    const props = {
+      agent: createAgent(),
+      onClose: vi.fn(),
+      onDelete: vi.fn(),
+      onToolCallingToggle: vi.fn(),
+      onThinkingTracesToggle: vi.fn(),
+      cronJobs: [],
+      cronLoading: false,
+      cronError: null,
+      cronRunBusyJobId: null,
+      cronDeleteBusyJobId: null,
+      onRunCronJob: vi.fn(),
+      onDeleteCronJob: vi.fn(),
+      onUpdateAgentPermissions,
+    };
+
+    const { rerender } = render(
+      createElement(AgentSettingsPanel, {
+        ...props,
+        permissionsDraft: {
+          commandMode: "off",
+          webAccess: false,
+          fileTools: false,
+        },
+      })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Run commands auto" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Web access" }));
+    fireEvent.click(screen.getByRole("switch", { name: "File tools" }));
+
+    rerender(
+      createElement(AgentSettingsPanel, {
+        ...props,
+        permissionsDraft: {
+          commandMode: "auto",
+          webAccess: false,
+          fileTools: false,
+        },
+      })
+    );
+
+    expect(screen.getByRole("switch", { name: "Web access" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+    expect(screen.getByRole("switch", { name: "File tools" })).toHaveAttribute(
+      "aria-checked",
+      "true"
     );
   });
 

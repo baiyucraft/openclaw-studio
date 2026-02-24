@@ -31,6 +31,7 @@ export type UseGatewayConfigSyncControllerParams = {
     kind: "repair-sandbox-tool-allowlist";
     label: string;
     run: () => Promise<void>;
+    requiresIdleAgents?: boolean;
   }) => Promise<void>;
   loadAgents: () => Promise<void>;
   isDisconnectLikeError: (err: unknown) => boolean;
