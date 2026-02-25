@@ -49,10 +49,34 @@ const hasNonEmptyToken = (params) => {
   return typeof raw === "string" && raw.trim().length > 0;
 };
 
-const hasDeviceSignature = (params) => {
-  const raw =
-    params && isObject(params) && isObject(params.device) ? params.device.signature : null;
+const hasNonEmptyPassword = (params) => {
+  const raw = params && isObject(params) && isObject(params.auth) ? params.auth.password : "";
   return typeof raw === "string" && raw.trim().length > 0;
+};
+
+const hasNonEmptyDeviceToken = (params) => {
+  const raw = params && isObject(params) && isObject(params.auth) ? params.auth.deviceToken : "";
+  return typeof raw === "string" && raw.trim().length > 0;
+};
+
+const hasCompleteDeviceAuth = (params) => {
+  const device = params && isObject(params) && isObject(params.device) ? params.device : null;
+  if (!device) {
+    return false;
+  }
+  const id = typeof device.id === "string" ? device.id.trim() : "";
+  const publicKey = typeof device.publicKey === "string" ? device.publicKey.trim() : "";
+  const signature = typeof device.signature === "string" ? device.signature.trim() : "";
+  const nonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
+  const signedAt = device.signedAt;
+  return (
+    id.length > 0 &&
+    publicKey.length > 0 &&
+    signature.length > 0 &&
+    nonce.length > 0 &&
+    Number.isFinite(signedAt) &&
+    signedAt >= 0
+  );
 };
 
 function createGatewayProxy(options) {
@@ -118,7 +142,11 @@ function createGatewayProxy(options) {
           return;
         }
         connectRequestId = id;
-        const browserHasAuth = hasNonEmptyToken(parsed.params) || hasDeviceSignature(parsed.params);
+        const browserHasAuth =
+          hasNonEmptyToken(parsed.params) ||
+          hasNonEmptyPassword(parsed.params) ||
+          hasNonEmptyDeviceToken(parsed.params) ||
+          hasCompleteDeviceAuth(parsed.params);
 
         let upstreamUrl = "";
         let upstreamToken = "";
