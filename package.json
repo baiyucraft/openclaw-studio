@@ -14,6 +14,7 @@
     "dev": "node server/index.js --dev",
     "dev:turbo": "node server/index.js --dev",
     "build": "next build",
+    "build:lowmem": "next build --no-lint",
     "start": "node server/index.js",
     "lint": "eslint .",
     "probe:agent-latency": "node scripts/probe-agent-history-latency.mjs",
